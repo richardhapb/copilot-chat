@@ -1,6 +1,6 @@
 use futures_util::Stream;
 
-use crate::chat::{Message, Role};
+use crate::chat::Message;
 use serde::{Deserialize, Serialize};
 
 use super::{auth::CopilotAuth, provider::Provider};
@@ -28,23 +28,15 @@ struct HeadersResponse {
 }
 
 impl Provider for CopilotClient {
-
     /// Make a request to copilot, passing the message provided by the user
     async fn request(
         &self,
-        message: Message,
+        messages: &Vec<Message>,
     ) -> anyhow::Result<impl Stream<Item = reqwest::Result<bytes::Bytes>>> {
         let headers = self.get_headers().await?;
 
         info!("Making request");
         trace!(?headers);
-
-        let mut messages: Vec<Message> = vec![];
-        messages.push(Message {
-            role: Role::System,
-            content: "You are an expert developer".to_string(),
-        });
-        messages.push(message);
         let body = CopilotBody {
             temperature: 0.1,
             max_tokens: 4096,
@@ -84,7 +76,6 @@ impl CopilotClient {
 
     /// Get the headers and token for use in requests
     async fn get_headers(&self) -> anyhow::Result<CopilotHeaders> {
-
         // Main auth token is required
         if self.auth.get_token().is_none() {
             let token = self.auth.get_token();
@@ -134,10 +125,10 @@ struct CopilotHeaders {
 
 /// Contain the commons parameters of the model for use in requests
 #[derive(Serialize, Debug)]
-struct CopilotBody {
+struct CopilotBody<'a> {
     temperature: f32,
     max_tokens: i32,
     model: String,
     stream: bool,
-    messages: Vec<Message>,
+    messages: &'a Vec<Message>,
 }

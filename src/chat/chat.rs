@@ -1,11 +1,17 @@
-use crate::client::provider::Provider;
+use std::fmt::Display;
+
+use crate::{chat::prompts::GENERAL, client::provider::Provider};
 use serde::{Deserialize, Serialize};
 use tokio::{io::AsyncWrite, sync::mpsc::channel};
 use tracing::{debug, error, info};
 
-use super::stream::Streamer;
+use super::{
+    prompts::{CODE, COMMIT, GIT},
+    stream::Streamer,
+};
 
 /// Main Chat structure, contains all chat-related attributes and methods
+#[allow(dead_code)]
 pub struct Chat<P: Provider> {
     messages: Vec<Message>,
     provider: P,
@@ -28,10 +34,26 @@ impl<P: Provider> Chat<P> {
     pub async fn send_message_with_stream(
         &self,
         message: Message,
+        message_type: MessageType,
         streamer: impl Streamer + Send + 'static,
         mut writer: impl AsyncWrite + Send + Unpin + 'static,
     ) -> anyhow::Result<Message> {
-        let mut stream = self.provider.request(message).await?;
+        // Create the prompt
+        let builder = self
+            .provider
+            .builder()
+            .with(Message {
+                role: Role::User,
+                content: GENERAL.to_string(),
+            })
+            .with(Message {
+                role: Role::User,
+                content: message_type.to_string(),
+            })
+            .with(message);
+
+        let mut stream = builder.request().await?;
+
         debug!("Creating channels");
         let (sender, receiver) = channel(32);
 
@@ -75,6 +97,67 @@ pub enum Role {
     System,
     #[serde(rename = "user")]
     User,
+}
+
+/// A builder for the initial prompt
+pub struct Builder<'a, P: Provider> {
+    client: &'a P,
+    messages: Vec<Message>,
+}
+
+impl<'a, P: Provider> Provider for Builder<'a, P> {
+    fn request(
+        &self,
+        messages: &Vec<Message>,
+    ) -> impl Future<
+        Output = anyhow::Result<impl futures_util::Stream<Item = reqwest::Result<bytes::Bytes>>>,
+    > {
+        self.client.request(messages)
+    }
+}
+
+impl<'a, P: Provider> Builder<'a, P> {
+    pub fn new(provider: &'a P) -> Self {
+        Self {
+            client: provider,
+            messages: vec![],
+        }
+    }
+
+    /// Append a message to the builder
+    pub fn with(mut self, message: Message) -> Self {
+        self.messages.push(message);
+        self
+    }
+
+    pub fn request(
+        &self,
+    ) -> impl Future<
+        Output = anyhow::Result<impl futures_util::Stream<Item = reqwest::Result<bytes::Bytes>>>,
+    > {
+        self.client.request(&self.messages)
+    }
+}
+
+/// Message type to be sent to Copilot
+#[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
+pub enum MessageType {
+    Commit,
+    Code,
+    Git,
+}
+
+impl Display for MessageType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let prompt = match self {
+            MessageType::Code => CODE,
+            MessageType::Commit => COMMIT,
+            MessageType::Git => GIT,
+        };
+
+        write!(f, "{}", prompt)
+    }
 }
 
 #[cfg(test)]
@@ -130,7 +213,7 @@ mod tests {
         };
 
         let response = chat
-            .send_message_with_stream(message, streamer, writer)
+            .send_message_with_stream(message, MessageType::Code, streamer, writer)
             .await
             .expect("process the stream");
 

@@ -1,12 +1,19 @@
-use crate::chat::Message;
+use crate::chat::{Builder, Message};
 use futures_util::Stream;
 
 /// A message provider from the Copilot API
 pub trait Provider {
     async fn request(
         &self,
-        message: Message,
+        messages: &Vec<Message>,
     ) -> anyhow::Result<impl Stream<Item = reqwest::Result<bytes::Bytes>>>;
+
+    fn builder(&self) -> Builder<Self>
+    where
+        Self: Sized,
+    {
+        Builder::new(self)
+    }
 }
 
 #[cfg(test)]
@@ -62,7 +69,7 @@ pub(crate) mod tests {
     impl<'a> Provider for TestProvider<'a> {
         async fn request(
             &self,
-            _message: crate::chat::Message,
+            _messages: &Vec<crate::chat::Message>,
         ) -> anyhow::Result<impl Stream<Item = reqwest::Result<bytes::Bytes>>> {
             let stream = TestStreamProvider::new(self.chunks, self.content);
             Ok(stream)

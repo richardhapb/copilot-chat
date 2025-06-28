@@ -8,7 +8,7 @@ pub struct Cli {
     pub command: Option<Commands>,
     /// Token path
     #[arg(short, long)]
-    token_path: String,
+    token_path: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]

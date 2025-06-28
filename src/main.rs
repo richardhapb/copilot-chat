@@ -1,5 +1,5 @@
 use chat::prompts::DEFAULT_PROMPT;
-use chat::{Chat, ChatStreamer, Message};
+use chat::{Chat, ChatStreamer, Message, MessageType};
 use clap::Parser;
 use cli::commands::{Cli, Commands};
 use std::io::{self, Read};
@@ -21,11 +21,6 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
-
-    match cli.command {
-        Some(Commands::Commit) => {}
-        None => {}
-    }
 
     // Dependencies
     let auth = client::auth::CopilotAuth::new();
@@ -50,9 +45,15 @@ async fn main() -> anyhow::Result<()> {
         content: stdin_str,
     };
 
+    let mut message_type = MessageType::Code;
+    match cli.command {
+        Some(Commands::Commit) => message_type = MessageType::Commit,
+        None => {}
+    }
+
     // Send with stream by default, maybe in the future a buffered
     // response can be returned if it is configured
-    chat.send_message_with_stream(message, streamer, writer)
+    chat.send_message_with_stream(message, message_type, streamer, writer)
         .await?;
 
     Ok(())
