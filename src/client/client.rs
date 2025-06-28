@@ -1,27 +1,80 @@
+use futures_util::Stream;
 
-use futures_util::StreamExt;
-
+use crate::chat::{Message, Role};
 use serde::{Deserialize, Serialize};
 
+use super::{auth::CopilotAuth, provider::Provider};
 use anyhow::anyhow;
-use super::auth::CopilotAuth;
 use tracing::{debug, error, info, trace};
 
+/// # Endpoints
+/// Endpoint where the auth token is retrieved for use it in completions
 static HEADERS_URL: &str = "https://api.github.com/copilot_internal/v2/token";
+/// Endpoint where Copilot returns a response
 static COMPLETION_URL: &str = "https://api.githubcopilot.com/chat/completions";
+/// This is used because Copilot requires a specified agent; otherwise, it returns a 403 status code.
 static USER_AGENT: &str = "curl/8.7.1";
 
+/// Main Copilot client
 pub struct CopilotClient {
     auth: CopilotAuth,
     client: reqwest::Client,
 }
 
+/// Struct used for retrieving the token from `HEADERS_URL`
 #[derive(Deserialize, Debug)]
 struct HeadersResponse {
     token: String,
 }
 
+impl Provider for CopilotClient {
+
+    /// Make a request to copilot, passing the message provided by the user
+    async fn request(
+        &self,
+        message: Message,
+    ) -> anyhow::Result<impl Stream<Item = reqwest::Result<bytes::Bytes>>> {
+        let headers = self.get_headers().await?;
+
+        info!("Making request");
+        trace!(?headers);
+
+        let mut messages: Vec<Message> = vec![];
+        messages.push(Message {
+            role: Role::System,
+            content: "You are an expert developer".to_string(),
+        });
+        messages.push(message);
+        let body = CopilotBody {
+            temperature: 0.1,
+            max_tokens: 4096,
+            model: "gpt-4o".to_string(),
+            messages,
+            stream: true,
+        };
+
+        trace!(?body);
+        let req = self
+            .client
+            .post(COMPLETION_URL)
+            .header("Authorization", format!("Bearer {}", headers.auth_token))
+            .header("Copilot-Integration-Id", headers.copilot_integration_id)
+            .header("Editor-Version", headers.editor_version)
+            .header("Editor-Plugin-Version", headers.editor_plugin_version)
+            .header("User-Agent", USER_AGENT)
+            .body(serde_json::to_string(&body)?);
+
+        let resp = req.send().await?;
+        debug!(?resp);
+
+        // Stream for processing the response
+        let stream = resp.bytes_stream();
+        Ok(stream)
+    }
+}
+
 impl CopilotClient {
+    /// Create a new client
     pub fn new(auth: CopilotAuth) -> Self {
         Self {
             auth,
@@ -29,13 +82,18 @@ impl CopilotClient {
         }
     }
 
+    /// Get the headers and token for use in requests
     async fn get_headers(&self) -> anyhow::Result<CopilotHeaders> {
+
+        // Main auth token is required
         if self.auth.get_token().is_none() {
             let token = self.auth.get_token();
             error!(?token, "token not found");
             return Err(anyhow!("Token not found"));
         }
+
         trace!(%HEADERS_URL, "retrieving headers");
+
         let req = self
             .client
             .get(HEADERS_URL)
@@ -63,89 +121,9 @@ impl CopilotClient {
             copilot_integration_id: "vscode-chat".to_string(),
         })
     }
-
-    pub async fn request(&self) -> anyhow::Result<()> {
-        let headers = self.get_headers().await?;
-
-        info!("Making request");
-        trace!(?headers);
-
-        let mut messages: Vec<Message> = vec![];
-        messages.push(Message {
-            role: "system".to_string(),
-            content: "You are a rust expert".to_string(),
-        });
-        messages.push(Message {role: "user".to_string(), content: "Give a guide for the most important things to learn in rust for developing the best softwares".to_string()});
-        let body = CopilotBody {
-            temperature: 0.1,
-            max_tokens: 1000,
-            model: "gpt-4o".to_string(),
-            messages,
-            stream: true,
-        };
-
-        trace!(?body);
-        let req = self
-            .client
-            .post(COMPLETION_URL)
-            .header("Authorization", format!("Bearer {}", headers.auth_token))
-            .header("Copilot-Integration-Id", headers.copilot_integration_id)
-            .header("Editor-Version", headers.editor_version)
-            .header("Editor-Plugin-Version", headers.editor_plugin_version)
-            .header("User-Agent", USER_AGENT)
-            .body(serde_json::to_string(&body)?);
-
-        let resp = req.send().await?;
-        debug!(?resp);
-
-        let mut stream = resp.bytes_stream();
-        let mut response = String::new();
-
-        debug!("Opening stream");
-        let mut partial_chunk = None;
-        while let Some(chunk) = stream.next().await {
-            debug!(?chunk, "processing");
-            let chunk = chunk?;
-
-            let mut chunk_str = String::from_utf8_lossy(&chunk);
-            if partial_chunk.is_some() {
-                chunk_str = format!("{}{}", partial_chunk.unwrap(), chunk_str).into();
-            }
-            partial_chunk = process_chunk(&chunk_str, &mut response).unwrap_or(None);
-        }
-        Ok(())
-    }
 }
 
-fn process_chunk(chunk: &str, destination: &mut String) -> anyhow::Result<Option<String>> {
-    let chunks = chunk.split("\n\n");
-
-    for (i, chunk) in chunks.clone().into_iter().enumerate() {
-        if chunk.is_empty() {
-            continue;
-        }
-        match serde_json::from_str::<CopilotResponse>(&chunk[6..]) {
-            Ok(resp_msg) => {
-                if let Some(choice) = resp_msg.choices.first() {
-                    if let Some(msg) = &choice.delta {
-                        let msg = msg.content.clone();
-                        print!("{}", msg);
-                        destination.push_str(&msg);
-                    }
-                }
-            }
-            Err(e) => {
-                // Is the last, should be a cutted chunk
-                if chunks.count() == i + 1 {
-                    return Ok(Some(chunk.to_string()));
-                }
-                return Err(e.into());
-            }
-        }
-    }
-    Ok(None)
-}
-
+/// Contain all the required headers for making a request
 #[derive(Debug)]
 struct CopilotHeaders {
     auth_token: String,
@@ -154,6 +132,7 @@ struct CopilotHeaders {
     copilot_integration_id: String,
 }
 
+/// Contain the commons parameters of the model for use in requests
 #[derive(Serialize, Debug)]
 struct CopilotBody {
     temperature: f32,
@@ -161,70 +140,4 @@ struct CopilotBody {
     model: String,
     stream: bool,
     messages: Vec<Message>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct Message {
-    role: String,
-    content: String,
-}
-
-#[derive(Deserialize, Debug)]
-struct Delta {
-    content: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct CopilotResponse {
-    choices: Vec<Choice>,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Deserialize)]
-struct Choice {
-    delta: Option<Delta>,
-    index: i32,
-    finish_reason: Option<String>,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_chunk_parsing() {
-        let chunk = "
-        {\"choices\":[{\"index\":0,\"content_filter_offsets\":{\"check_offset\":175,\"start_offset\":176,\"end_offset\":280},
-        \"content_filter_results\":{\"hate\":{\"filtered\":false,\"severity\":\"safe\"},\"self_harm\":{\"filtered\":false,
-        \"severity\":\"safe\"},\"sexual\":{\"filtered\":false,\"severity\":\"safe\"},\"violence\":{\"filtered\":false,\"severity\":\"safe\"}},
-        \"delta\":{\"content\":\" safety\"}}],\"created\":1751000792,\"id\":\"chatcmpl-BmvaCUrU0DjRli6juhycOsjF1OAZr\",
-        \"model\":\"gpt-4o-2024-11-20\",\"system_fingerprint\":\"fp_b705f0c291\"}
-        ";
-
-        let mut dest = String::new();
-        let resp = process_chunk(chunk, &mut dest);
-
-        assert!(resp.is_ok())
-    }
-
-    #[test]
-    fn test_double_chunk_parsing() {
-        let double = "
-        {\"choices\":[{\"index\":0,\"content_filter_offsets\":{\"check_offset\":175,\"start_offset\":334,\"end_offset\":435},
-        \"content_filter_results\":{\"hate\":{\"filtered\":false,\"severity\":\"safe\"},\"self_harm\":{\"filtered\":false,
-        \"severity\":\"safe\"},\"sexual\":{\"filtered\":false,\"severity\":\"safe\"},
-        \"violence\":{\"filtered\":false,\"severity\":\"safe\"}},\"delta\":{\"content\":\" the\"}}],
-        \"created\":1751000792,\"id\":\"chatcmpl-BmvaCUrU0DjRli6juhycOsjF1OAZr\",\"model\":\"gpt-4o-2024-11-20\",
-        \"system_fingerprint\":\"fp_b705f0c291\"}\n\ndata: {\"choices\":[{\"index\":0,\"content_filter_offsets\":{\"check_offset\":175,\"start_offset\":334,
-        \"end_offset\":435},\"content_filter_results\":{\"hate\":{\"filtered\":false,\"severity\":\"safe\"},\"self_harm\":{\"filtered\":false,\"severity\":\"safe\"},
-        \"sexual\":{\"filtered\":false,\"severity\":\"safe\"},\"violence\":{\"filtered\":false,\"severity\":\"safe\"}},
-        \"delta\":{\"content\":\" most\"}}],\"created\":1751000792,\"id\":\"chatcmpl-BmvaCUrU0DjRli6juhycOsjF1OAZr\",
-        \"model\":\"gpt-4o-2024-11-20\",\"system_fingerprint\":\"fp_b705f0c291\"}
-        ";
-
-        let mut dest = String::new();
-        let resp = process_chunk(double, &mut dest);
-
-        assert!(resp.is_ok())
-    }
 }

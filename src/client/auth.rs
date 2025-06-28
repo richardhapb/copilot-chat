@@ -4,12 +4,15 @@ use std::{fs::File, io::Read};
 use serde::Deserialize;
 use tracing::{debug, error, trace};
 
+/// Handle all related authorizations features of Copilot
 #[derive(Debug, Deserialize)]
 pub struct CopilotAuth {
     oauth_token: Option<String>,
 }
 
 impl CopilotAuth {
+    /// Try to get the main token and return an instance.
+    /// If the token cannot be found, it will be None.
     pub fn new() -> Self {
         let mut auth = Self { oauth_token: None };
         auth.get_token_from_file().unwrap();
@@ -17,17 +20,21 @@ impl CopilotAuth {
         auth
     }
 
+    /// Return an [`Option`], maybe with the token
     pub fn get_token(&self) -> Option<&str> {
         self.oauth_token.as_deref()
     }
 
-    /// Get the Copilot token from the known directories
+    /// Retrieve the Copilot token from known directories
+    /// By default, it looks in `~/.config/github-copilot/apps.json`
     fn get_token_from_file<'a>(&'a mut self) -> anyhow::Result<Option<&'a str>> {
+
+        // Return an existent token if exists
         if self.oauth_token.is_some() {
             return Ok(self.oauth_token.as_deref());
         }
 
-        debug!("Token not found, looking for it in file");
+        debug!("Token not found; searching for it in the file.");
 
         let config_path = dirs::home_dir().expect("path is resolved");
         let copilot_file = config_path
@@ -41,7 +48,7 @@ impl CopilotAuth {
         let mut file_str = String::new();
         let n = file.read_to_string(&mut file_str)?;
         if n == 0 {
-            error!("Config file not found");
+            error!("Emptyt config file");
             return Err(anyhow!("Empty config file"));
         }
 
