@@ -19,6 +19,7 @@ Changes.
 
 Only give me the message; it is not necessary to explain it. The key point is to be clear and concise.
 If you don't have git diff data, request it, but do not provide a message without the necessary data.
+Also void using a code block, only put the raw text
 "#;
 
 /// Prompt for generating or modifying code snippets directly.

@@ -39,11 +39,14 @@ async fn main() -> anyhow::Result<()> {
         stdin.lock().read_to_string(&mut stdin_str)?;
     }
 
-    let mut message_type = MessageType::Code;
-    match cli.command {
-        Some(Commands::Commit) => {
-            message_type = MessageType::Commit;
+    // Parse the user prompt from CLI if exist.
+    let user_prompt = match cli.prompt {
+        Some(prompt) => Some(prompt.join(" ")),
+        None => None,
+    };
 
+    let message_type = match cli.command {
+        Some(Commands::Commit) => {
             // If there is not a stdin, try to get the git diff
             // in the current directory
             if stdin_str.is_empty() {
@@ -58,9 +61,11 @@ async fn main() -> anyhow::Result<()> {
                     std::process::exit(1);
                 }
             }
+            MessageType::Commit(user_prompt)
         }
-        None => {}
-    }
+        // Default
+        None => MessageType::Code(user_prompt),
+    };
 
     // First message
     let message = Message {

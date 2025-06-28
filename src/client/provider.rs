@@ -18,21 +18,31 @@ pub trait Provider {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::{
+        cell::RefCell,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
 
     use bytes::{BufMut, Bytes, BytesMut};
     use futures_util::Stream;
+
+    use crate::chat::Message;
 
     use super::Provider;
 
     pub struct TestProvider<'a> {
         chunks: usize,
         content: &'a str,
+        pub input_messages: RefCell<Vec<Message>>,
     }
 
     impl<'a> TestProvider<'a> {
         pub fn new(chunks: usize, content: &'a str) -> Self {
-            Self { chunks, content }
+            Self {
+                chunks,
+                content,
+                input_messages: RefCell::new(vec![]),
+            }
         }
     }
 
@@ -69,9 +79,10 @@ pub(crate) mod tests {
     impl<'a> Provider for TestProvider<'a> {
         async fn request(
             &self,
-            _messages: &Vec<crate::chat::Message>,
+            messages: &Vec<crate::chat::Message>,
         ) -> anyhow::Result<impl Stream<Item = reqwest::Result<bytes::Bytes>>> {
             let stream = TestStreamProvider::new(self.chunks, self.content);
+            self.input_messages.replace(messages.to_owned());
             Ok(stream)
         }
     }

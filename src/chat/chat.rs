@@ -52,6 +52,12 @@ impl<P: Provider> Chat<P> {
             })
             .with(message);
 
+        // Add the user message if it exists
+        let builder = match message_type.resolve_user_prompt() {
+            Some(user_message) => builder.with(user_message),
+            None => builder,
+        };
+
         let mut stream = builder.request().await?;
 
         debug!("Creating channels");
@@ -84,14 +90,14 @@ impl<P: Provider> Chat<P> {
 }
 
 /// A chat message
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Message {
     pub role: Role,
     pub content: String,
 }
 
 /// The sender of the message
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Role {
     #[serde(rename = "system")]
     System,
@@ -140,23 +146,42 @@ impl<'a, P: Provider> Builder<'a, P> {
 }
 
 /// Message type to be sent to Copilot
-#[derive(Debug, Clone, Copy)]
+/// each type include an user prompt
+#[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub enum MessageType {
-    Commit,
-    Code,
-    Git,
+    Commit(Option<String>),
+    Code(Option<String>),
+    Git(Option<String>),
 }
 
 impl Display for MessageType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let prompt = match self {
-            MessageType::Code => CODE,
-            MessageType::Commit => COMMIT,
-            MessageType::Git => GIT,
+            MessageType::Code(_) => CODE,
+            MessageType::Commit(_) => COMMIT,
+            MessageType::Git(_) => GIT,
         };
 
         write!(f, "{}", prompt)
+    }
+}
+
+impl MessageType {
+    fn resolve_user_prompt(&self) -> Option<Message> {
+        let prompt = match self {
+            MessageType::Code(user_prompt) => user_prompt,
+            MessageType::Commit(user_prompt) => user_prompt,
+            MessageType::Git(user_prompt) => user_prompt,
+        };
+
+        match prompt {
+            Some(content) => Some(Message {
+                role: Role::User,
+                content: content.to_string(),
+            }),
+            None => None,
+        }
     }
 }
 
@@ -213,10 +238,43 @@ mod tests {
         };
 
         let response = chat
-            .send_message_with_stream(message, MessageType::Code, streamer, writer)
+            .send_message_with_stream(message, MessageType::Code(None), streamer, writer)
             .await
             .expect("process the stream");
 
         assert_eq!(response.content, "Rust ".repeat(10));
+    }
+
+    #[tokio::test]
+    async fn test_custom_user_message() {
+        let provider = TestProvider::new(10, "");
+        let chat = Chat::new(provider);
+        let streamer = TestStreamer;
+        let writer = TestWriter;
+
+        let message = Message {
+            role: Role::User,
+            content: "hello".to_string(),
+        };
+
+        chat.send_message_with_stream(
+            message,
+            MessageType::Code(Some("I am an user".to_string())),
+            streamer,
+            writer,
+        )
+        .await
+        .expect("process the stream");
+
+        // The user message must be in request
+        let mut exists = false;
+        for message in chat.provider.input_messages.into_inner() {
+            if message.content == "I am an user" {
+                exists = true;
+                break;
+            }
+        }
+
+        assert!(exists);
     }
 }
