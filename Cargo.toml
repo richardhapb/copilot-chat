@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.98"
+atty = "0.2.14"
 bytes = "1.10.1"
 clap = { version = "4.5.40", features = ["derive"] }
 dirs = "6.0.0"

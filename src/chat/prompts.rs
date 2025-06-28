@@ -1,8 +1,5 @@
 //! This module contains all the prompt-related data.
 
-/// Default fallback prompt.
-pub static DEFAULT_PROMPT: &str = "Hello";
-
 /// General-purpose code generation prompt.
 pub static GENERAL: &str = r#"
 You are an expert software engineer. Suggest the minimal, most effective solution.

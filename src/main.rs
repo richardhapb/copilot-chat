@@ -1,14 +1,15 @@
-use chat::prompts::DEFAULT_PROMPT;
 use chat::{Chat, ChatStreamer, Message, MessageType};
 use clap::Parser;
 use cli::commands::{Cli, Commands};
 use std::io::{self, Read};
+use tools::cli::CliExecutor;
 use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 mod chat;
 mod cli;
 mod client;
+mod tools;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -29,14 +30,36 @@ async fn main() -> anyhow::Result<()> {
     let streamer = ChatStreamer;
     let writer = tokio::io::stdout();
 
-    // STDIN
-    let stdin = io::stdin();
     let mut stdin_str = String::new();
-    let n = stdin.lock().read_to_string(&mut stdin_str)?;
 
-    // If there is not a stdin, pass the default prompt
-    if n == 0 {
-        stdin_str = DEFAULT_PROMPT.to_string();
+    // Read only from piped stdin
+    if !atty::is(atty::Stream::Stdin) {
+        // STDIN
+        let stdin = io::stdin();
+        stdin.lock().read_to_string(&mut stdin_str)?;
+    }
+
+    let mut message_type = MessageType::Code;
+    match cli.command {
+        Some(Commands::Commit) => {
+            message_type = MessageType::Commit;
+
+            // If there is not a stdin, try to get the git diff
+            // in the current directory
+            if stdin_str.is_empty() {
+                stdin_str = CliExecutor::new()
+                    .execute("git", &["diff", "--staged"])
+                    .await?;
+
+                if stdin_str.is_empty() {
+                    eprintln!(
+                        "Git diff is empty. Ensure you are in a repository and that the changes are staged."
+                    );
+                    std::process::exit(1);
+                }
+            }
+        }
+        None => {}
     }
 
     // First message
@@ -44,12 +67,6 @@ async fn main() -> anyhow::Result<()> {
         role: chat::Role::User,
         content: stdin_str,
     };
-
-    let mut message_type = MessageType::Code;
-    match cli.command {
-        Some(Commands::Commit) => message_type = MessageType::Commit,
-        None => {}
-    }
 
     // Send with stream by default, maybe in the future a buffered
     // response can be returned if it is configured
