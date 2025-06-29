@@ -64,7 +64,10 @@ async fn main() -> anyhow::Result<()> {
             MessageType::Commit(user_prompt)
         }
         // Default
-        None => MessageType::Code(user_prompt),
+        None => MessageType::Code {
+            user_prompt,
+            files: cli.files,
+        },
     };
 
     // First message

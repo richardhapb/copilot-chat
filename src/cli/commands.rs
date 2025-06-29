@@ -8,6 +8,10 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
 
+    /// File path for being read by Copilot
+    #[arg(short, long)]
+    pub files: Option<Vec<String>>,
+
     /// Token path
     #[arg(short, long)]
     token_path: Option<String>,

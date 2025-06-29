@@ -1,6 +1,10 @@
 use std::fmt::Display;
 
-use crate::{chat::prompts::GENERAL, client::provider::Provider};
+use crate::{
+    chat::prompts::GENERAL,
+    client::provider::Provider,
+    tools::{files::{FileRange, FileReader}, reader::ReaderTool},
+};
 use serde::{Deserialize, Serialize};
 use tokio::{io::AsyncWrite, sync::mpsc::channel};
 use tracing::{debug, error, info};
@@ -56,6 +60,30 @@ impl<P: Provider> Chat<P> {
         let builder = match message_type.resolve_user_prompt() {
             Some(user_message) => builder.with(user_message),
             None => builder,
+        };
+
+        let builder = match message_type {
+            MessageType::Code {
+                user_prompt: _,
+                files,
+            } => {
+                let mut builder = builder;
+                // Add the files to copilot prompt
+                if let Some(files) = files {
+                    for file in files {
+                        let mut reader = FileReader::from_file_arg(&file);
+                        let range = FileRange::from_file_arg(&file);
+                        let readable = reader.get_readable();
+                        reader.read(&readable).await?;
+                        builder = builder.with(Message {
+                            content: reader.prepare_for_copilot(&readable, range.as_ref()).await?,
+                            role: Role::User,
+                        })
+                    }
+                }
+                builder
+            }
+            _ => builder,
         };
 
         let mut stream = builder.request().await?;
@@ -151,14 +179,20 @@ impl<'a, P: Provider> Builder<'a, P> {
 #[allow(dead_code)]
 pub enum MessageType {
     Commit(Option<String>),
-    Code(Option<String>),
+    Code {
+        user_prompt: Option<String>,
+        files: Option<Vec<String>>,
+    },
     Git(Option<String>),
 }
 
 impl Display for MessageType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let prompt = match self {
-            MessageType::Code(_) => CODE,
+            MessageType::Code {
+                user_prompt: _,
+                files: _,
+            } => CODE,
             MessageType::Commit(_) => COMMIT,
             MessageType::Git(_) => GIT,
         };
@@ -170,7 +204,10 @@ impl Display for MessageType {
 impl MessageType {
     fn resolve_user_prompt(&self) -> Option<Message> {
         let prompt = match self {
-            MessageType::Code(user_prompt) => user_prompt,
+            MessageType::Code {
+                user_prompt,
+                files: _,
+            } => user_prompt,
             MessageType::Commit(user_prompt) => user_prompt,
             MessageType::Git(user_prompt) => user_prompt,
         };
@@ -238,7 +275,15 @@ mod tests {
         };
 
         let response = chat
-            .send_message_with_stream(message, MessageType::Code(None), streamer, writer)
+            .send_message_with_stream(
+                message,
+                MessageType::Code {
+                    user_prompt: None,
+                    files: None,
+                },
+                streamer,
+                writer,
+            )
             .await
             .expect("process the stream");
 
@@ -259,7 +304,10 @@ mod tests {
 
         chat.send_message_with_stream(
             message,
-            MessageType::Code(Some("I am an user".to_string())),
+            MessageType::Code {
+                user_prompt: Some("I am an user".to_string()),
+                files: None,
+            },
             streamer,
             writer,
         )
