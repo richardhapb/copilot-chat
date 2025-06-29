@@ -8,11 +8,11 @@ pub trait Provider {
         messages: &Vec<Message>,
     ) -> anyhow::Result<impl Stream<Item = reqwest::Result<bytes::Bytes>>>;
 
-    fn builder(&self) -> Builder<Self>
+    fn builder<'a>(&'a self, messages: &'a mut Vec<Message>) -> Builder<'a, Self>
     where
         Self: Sized,
     {
-        Builder::new(self)
+        Builder::new(self, messages)
     }
 }
 

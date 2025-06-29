@@ -84,22 +84,21 @@ impl<P: Provider + Default> Chat<P> {
     /// Send a message to Copilot and write the response to `Stdout` using the streamed data
     /// also returns the `System` message when it is ready.
     pub async fn send_message_with_stream(
-        &self,
+        &mut self,
         message: Message,
         message_type: MessageType,
         streamer: impl Streamer + Send + 'static,
         mut writer: impl AsyncWrite + Send + Unpin + 'static,
     ) -> anyhow::Result<Message> {
-        let builder = if self.messages.is_empty() {
+        let builder = self.provider.builder(&mut self.messages);
+        let builder = if builder.messages.is_empty() {
             // Create the inital prompt if not exists
-            self.provider.builder().with(Message {
+            builder.with(Message {
                 role: Role::User,
                 content: GENERAL.to_string(),
             })
         } else {
-            // Use the existants messages
-            let mut builder = self.provider.builder();
-            builder.messages = self.messages.clone();
+            // Use the existing messages
             builder
         }
         .with(Message {
@@ -214,7 +213,7 @@ pub enum Role {
 /// A builder for the initial prompt
 pub struct Builder<'a, P: Provider> {
     client: &'a P,
-    messages: Vec<Message>,
+    messages: &'a mut Vec<Message>,
 }
 
 impl<'a, P: Provider> Provider for Builder<'a, P> {
@@ -229,16 +228,17 @@ impl<'a, P: Provider> Provider for Builder<'a, P> {
 }
 
 impl<'a, P: Provider> Builder<'a, P> {
-    pub fn new(provider: &'a P) -> Self {
+    pub fn new(provider: &'a P, messages: &'a mut Vec<Message>) -> Self {
         Self {
             client: provider,
-            messages: vec![],
+            messages,
         }
     }
 
     /// Append a message to the builder
-    pub fn with(mut self, message: Message) -> Self {
+    pub fn with(self, message: Message) -> Self {
         self.messages.push(message);
+
         self
     }
 
@@ -343,7 +343,7 @@ mod tests {
         ";
 
         let provider = TestProvider::new(10, chunk);
-        let chat = Chat::new(provider);
+        let mut chat = Chat::new(provider);
         let streamer = TestStreamer;
         let writer = TestWriter;
 
@@ -371,7 +371,7 @@ mod tests {
     #[tokio::test]
     async fn test_custom_user_message() {
         let provider = TestProvider::new(10, "");
-        let chat = Chat::new(provider);
+        let mut chat = Chat::new(provider);
         let streamer = TestStreamer;
         let writer = TestWriter;
 
