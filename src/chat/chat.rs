@@ -1,10 +1,21 @@
-use std::fmt::Display;
+use std::{
+    env::current_dir,
+    fmt::Display,
+    fs::{File, create_dir_all},
+    io::Write,
+    path::PathBuf,
+    str::FromStr,
+};
 
 use crate::{
     chat::prompts::GENERAL,
     client::provider::Provider,
-    tools::{files::{FileRange, FileReader}, reader::ReaderTool},
+    tools::{
+        files::{FileRange, FileReader},
+        reader::ReaderTool,
+    },
 };
+use percent_encoding::{NON_ALPHANUMERIC, percent_encode};
 use serde::{Deserialize, Serialize};
 use tokio::{io::AsyncWrite, sync::mpsc::channel};
 use tracing::{debug, error, info};
@@ -15,13 +26,14 @@ use super::{
 };
 
 /// Main Chat structure, contains all chat-related attributes and methods
-#[allow(dead_code)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Chat<P: Provider> {
     messages: Vec<Message>,
+    #[serde(skip)]
     provider: P,
 }
 
-impl<P: Provider> Chat<P> {
+impl<P: Provider + Default> Chat<P> {
     /// Create new chat
     pub fn new(provider: P) -> Self {
         Self {
@@ -33,6 +45,42 @@ impl<P: Provider> Chat<P> {
         }
     }
 
+    pub fn with_provider(mut self, provider: P) -> Self {
+        self.provider = provider;
+        self
+    }
+
+    pub fn add_message(&mut self, message: Message) {
+        self.messages.push(message);
+    }
+
+    /// Try to load a chat for the currenct directory
+    pub fn try_load_chat(path: Option<&str>) -> anyhow::Result<Option<Self>> {
+        let cache = if let Some(path) = path {
+            PathBuf::from_str(path)?
+        } else {
+            let home = dirs::home_dir().ok_or(anyhow::anyhow!("read user's home"))?;
+            home.join(".cache").join("copilot-chat")
+        };
+
+        let cwd = current_dir()?;
+        let encoded = percent_encode(
+            cwd.to_str()
+                .ok_or(anyhow::anyhow!("error encoding path"))?
+                .as_bytes(),
+            NON_ALPHANUMERIC,
+        );
+
+        let cache_file = cache.join(format!("{}.json", encoded));
+        let exists = std::fs::exists(&cache_file)?;
+        if !exists {
+            return Ok(None);
+        }
+
+        let chat_str = std::fs::read_to_string(&cache_file)?;
+        Ok(Some(serde_json::from_str(&chat_str)?))
+    }
+
     /// Send a message to Copilot and write the response to `Stdout` using the streamed data
     /// also returns the `System` message when it is ready.
     pub async fn send_message_with_stream(
@@ -42,19 +90,23 @@ impl<P: Provider> Chat<P> {
         streamer: impl Streamer + Send + 'static,
         mut writer: impl AsyncWrite + Send + Unpin + 'static,
     ) -> anyhow::Result<Message> {
-        // Create the prompt
-        let builder = self
-            .provider
-            .builder()
-            .with(Message {
+        let builder = if self.messages.is_empty() {
+            // Create the inital prompt if not exists
+            self.provider.builder().with(Message {
                 role: Role::User,
                 content: GENERAL.to_string(),
             })
-            .with(Message {
-                role: Role::User,
-                content: message_type.to_string(),
-            })
-            .with(message);
+        } else {
+            // Use the existants messages
+            let mut builder = self.provider.builder();
+            builder.messages = self.messages.clone();
+            builder
+        }
+        .with(Message {
+            role: Role::User,
+            content: message_type.to_string(),
+        })
+        .with(message);
 
         // Add the user message if it exists
         let builder = match message_type.resolve_user_prompt() {
@@ -76,7 +128,9 @@ impl<P: Provider> Chat<P> {
                         let readable = reader.get_readable();
                         reader.read(&readable).await?;
                         builder = builder.with(Message {
-                            content: reader.prepare_for_copilot(&readable, range.as_ref()).await?,
+                            content: reader
+                                .prepare_for_copilot(&readable, range.as_ref())
+                                .await?,
                             role: Role::User,
                         })
                     }
@@ -115,6 +169,30 @@ impl<P: Provider> Chat<P> {
         info!("Message collected");
         Ok(message)
     }
+
+    /// Save the chat for the current directory
+    pub fn save_chat(&self, path: Option<&str>) -> anyhow::Result<()> {
+        let cache = if let Some(path) = path {
+            PathBuf::from_str(path)?
+        } else {
+            let home = dirs::home_dir().ok_or(anyhow::anyhow!("read user's home"))?;
+            home.join(".cache").join("copilot-chat")
+        };
+        create_dir_all(&cache)?;
+
+        let cwd = current_dir()?;
+        let encoded = percent_encode(
+            cwd.to_str()
+                .ok_or(anyhow::anyhow!("error encoding path"))?
+                .as_bytes(),
+            NON_ALPHANUMERIC,
+        );
+
+        let cache_file = cache.join(format!("{}.json", encoded));
+        let mut file = File::create(cache_file)?;
+        file.write_all(serde_json::to_string(self)?.as_bytes())?;
+        Ok(())
+    }
 }
 
 /// A chat message
@@ -125,7 +203,7 @@ pub struct Message {
 }
 
 /// The sender of the message
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum Role {
     #[serde(rename = "system")]
     System,
@@ -324,5 +402,55 @@ mod tests {
         }
 
         assert!(exists);
+    }
+
+    #[test]
+    fn save_and_load_chat() {
+        let file = "/tmp";
+        let provider = TestProvider::new(0, "");
+        let mut chat1 = Chat::new(provider);
+
+        chat1.add_message(Message {
+            content: "Hello".to_string(),
+            role: Role::User,
+        });
+        chat1.add_message(Message {
+            content: "Hello, how are you?".to_string(),
+            role: Role::System,
+        });
+
+        chat1.save_chat(Some(file)).expect("save the chat");
+
+        let provider = TestProvider::new(0, "");
+        let chat2 = Chat::try_load_chat(Some(file))
+            .expect("load chat")
+            .expect("retrieve chat")
+            .with_provider(provider);
+
+        assert_eq!(
+            chat1
+                .messages
+                .first()
+                .expect("first message in chat 1")
+                .content,
+            chat2
+                .messages
+                .first()
+                .expect("first message in chat 2")
+                .content
+        );
+
+        assert_eq!(
+            chat1
+                .messages
+                .first()
+                .expect("first message in chat 1")
+                .role,
+            chat2
+                .messages
+                .first()
+                .expect("first message in chat 2")
+                .role
+        )
     }
 }

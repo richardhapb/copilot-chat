@@ -5,7 +5,7 @@ use serde::Deserialize;
 use tracing::{debug, error, trace};
 
 /// Handle all related authorizations features of Copilot
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 pub struct CopilotAuth {
     oauth_token: Option<String>,
 }

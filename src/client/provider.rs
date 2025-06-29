@@ -30,6 +30,7 @@ pub(crate) mod tests {
 
     use super::Provider;
 
+    #[derive(Default)]
     pub struct TestProvider<'a> {
         chunks: usize,
         content: &'a str,

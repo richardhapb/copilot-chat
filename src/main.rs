@@ -26,7 +26,10 @@ async fn main() -> anyhow::Result<()> {
     // Dependencies
     let auth = client::auth::CopilotAuth::new();
     let client = client::CopilotClient::new(auth);
-    let chat = Chat::new(client);
+    let mut chat = match Chat::try_load_chat(None)? {
+        Some(chat) => chat.with_provider(client),
+        None => Chat::new(client),
+    };
     let streamer = ChatStreamer;
     let writer = tokio::io::stdout();
 
@@ -78,8 +81,11 @@ async fn main() -> anyhow::Result<()> {
 
     // Send with stream by default, maybe in the future a buffered
     // response can be returned if it is configured
-    chat.send_message_with_stream(message, message_type, streamer, writer)
+    let response_message = chat
+        .send_message_with_stream(message, message_type, streamer, writer)
         .await?;
 
+    chat.add_message(response_message);
+    chat.save_chat(None)?;
     Ok(())
 }

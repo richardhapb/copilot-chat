@@ -16,6 +16,7 @@ static COMPLETION_URL: &str = "https://api.githubcopilot.com/chat/completions";
 static USER_AGENT: &str = "curl/8.7.1";
 
 /// Main Copilot client
+#[derive(Default)]
 pub struct CopilotClient {
     auth: CopilotAuth,
     client: reqwest::Client,

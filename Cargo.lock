@@ -215,6 +215,7 @@ dependencies = [
  "clap",
  "dirs",
  "futures-util",
+ "percent-encoding",
  "reqwest",
  "serde",
  "serde_json",
