@@ -31,6 +31,7 @@ pub struct Chat<P: Provider> {
     messages: Vec<Message>,
     #[serde(skip)]
     provider: P,
+    tracked_files: Vec<String>,
 }
 
 impl<P: Provider + Default> Chat<P> {
@@ -42,6 +43,7 @@ impl<P: Provider + Default> Chat<P> {
 
             // Provider wich connect with the API
             provider,
+            tracked_files: vec![],
         }
     }
 
@@ -123,9 +125,22 @@ impl<P: Provider + Default> Chat<P> {
                 if let Some(files) = files {
                     for file in files {
                         let mut reader = FileReader::from_file_arg(&file);
+
                         let range = FileRange::from_file_arg(&file);
                         let readable = reader.get_readable();
                         reader.read(&readable).await?;
+
+                        // If the file is not tracked tracked, send it once
+                        builder = if !self.tracked_files.contains(&reader.path) {
+                            self.tracked_files.push(reader.path.clone());
+                            builder.with(Message {
+                                content: reader.prepare_load_once(&readable).await?,
+                                role: Role::User,
+                            })
+                        } else {
+                            builder
+                        };
+
                         builder = builder.with(Message {
                             content: reader
                                 .prepare_for_copilot(&readable, range.as_ref())

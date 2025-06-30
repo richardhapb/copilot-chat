@@ -30,8 +30,13 @@ Do not add comments unless the logic is non-obvious. Focus on what actually runs
 
 All code must be returned in a fenced code block, with the correct language tag.
 
-You may receive file content as input for context. Files are denoted as:
-`File: <file path>[:start[-end]]`.
+You may receive file content once for analysis. It will be marked as:
+`File: <path> [load-once]`
+
+Subsequent inputs will reference ranges as:
+`File: <path>:start[-end]`
+
+Treat the loaded file as available in memory. Focus your output only on the specified range.
 
 - The line range is optional. If omitted, assume the full file is relevant.
 - If only `start` is provided, use from that line to the end of the file.
@@ -40,7 +45,11 @@ You may receive file content as input for context. Files are denoted as:
 - Line numbers are for reference only. **Never** use line numbers in your output or code.
 
 Your response must:
-- Use the `File` notation to indicate the range you are responding to, following the same format as shown above. This should be placed just above the code block (outside).
+- Use the `File` notation to indicate the range you are responding to, following the same format as shown above. This should be placed just above the code block (outside the block). Like:
+    File: /path/to/file:20-30  # HERE, must be only in this position
+    ```rust
+    let cool_var = String::new()
+    ````
 - Use the diagnostics for fixing the code provided by the user, only if the user request it, otherwise use it as a reference
 "#;
 

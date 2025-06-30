@@ -53,7 +53,7 @@ impl Readable for FileReadable {
 /// Read a file content and handle all file-related context
 #[derive(Debug, Default, Clone)]
 pub struct FileReader {
-    path: String,
+    pub path: String,
     content: String,
 }
 
@@ -127,13 +127,20 @@ impl FileReader {
     /// - Read the file
     /// - Add the line number for each line
     /// - Add the file name and indicate the range selected by the user
+    pub async fn prepare_load_once(&mut self, readable: &impl Readable) -> anyhow::Result<String> {
+        self.read(readable).await?;
+        let numbered = self.add_line_numbers();
+        Ok(format!("File: {} [load-once]\n\n{}", readable.location(), numbered))
+    }
+
+    /// Prepare the necesary data for copilot
+    /// - Add the file name and indicate the range selected by the user
     pub async fn prepare_for_copilot(
         &mut self,
         readable: &impl Readable,
         range: Option<&FileRange>,
     ) -> anyhow::Result<String> {
         self.read(readable).await?;
-        let numbered = self.add_line_numbers();
         if let Some(range) = range {
             let mut range_str = range.to_string();
             if range.end == 0 {
@@ -143,14 +150,9 @@ impl FileReader {
                     .0
                     .to_string();
             }
-            Ok(format!(
-                "File: {}{}\n\n{}",
-                readable.location(),
-                range_str,
-                numbered
-            ))
+            Ok(format!("File: {}{}", readable.location(), range_str,))
         } else {
-            Ok(format!("File: {}\n\n{}", readable.location(), numbered))
+            Ok(format!("File: {}", readable.location()))
         }
     }
 }
