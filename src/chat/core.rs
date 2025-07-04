@@ -73,7 +73,7 @@ impl<P: Provider + Default> Chat<P> {
             NON_ALPHANUMERIC,
         );
 
-        let cache_file = cache.join(format!("{}.json", encoded));
+        let cache_file = cache.join(format!("{encoded}.json"));
         let exists = std::fs::exists(&cache_file)?;
         if !exists {
             return Ok(None);
@@ -89,7 +89,7 @@ impl<P: Provider + Default> Chat<P> {
         &mut self,
         message: Message,
         message_type: MessageType,
-        streamer: impl Streamer + Send + 'static,
+        streamer: impl Streamer + 'static,
         mut writer: impl AsyncWrite + Send + Unpin + 'static,
     ) -> anyhow::Result<Message> {
         let builder = self.provider.builder(&mut self.messages);
@@ -154,7 +154,7 @@ impl<P: Provider + Default> Chat<P> {
             _ => builder,
         };
 
-        let mut stream = builder.request().await?;
+        let stream = builder.request().await?;
 
         debug!("Creating channels");
         let (sender, receiver) = channel(32);
@@ -202,7 +202,7 @@ impl<P: Provider + Default> Chat<P> {
             NON_ALPHANUMERIC,
         );
 
-        let cache_file = cache.join(format!("{}.json", encoded));
+        let cache_file = cache.join(format!("{encoded}.json"));
         let mut file = File::create(cache_file)?;
         file.write_all(serde_json::to_string(self)?.as_bytes())?;
         Ok(())
@@ -234,7 +234,7 @@ pub struct Builder<'a, P: Provider> {
 impl<'a, P: Provider> Provider for Builder<'a, P> {
     fn request(
         &self,
-        messages: &Vec<Message>,
+        messages: &[Message],
     ) -> impl Future<
         Output = anyhow::Result<impl futures_util::Stream<Item = reqwest::Result<bytes::Bytes>>>,
     > {
@@ -262,7 +262,7 @@ impl<'a, P: Provider> Builder<'a, P> {
     ) -> impl Future<
         Output = anyhow::Result<impl futures_util::Stream<Item = reqwest::Result<bytes::Bytes>>>,
     > {
-        self.client.request(&self.messages)
+        self.client.request(self.messages)
     }
 }
 
@@ -290,7 +290,7 @@ impl Display for MessageType {
             MessageType::Git(_) => GIT,
         };
 
-        write!(f, "{}", prompt)
+        write!(f, "{prompt}")
     }
 }
 
@@ -305,13 +305,10 @@ impl MessageType {
             MessageType::Git(user_prompt) => user_prompt,
         };
 
-        match prompt {
-            Some(content) => Some(Message {
-                role: Role::User,
-                content: content.to_string(),
-            }),
-            None => None,
-        }
+        prompt.as_ref().map(|content| Message {
+            role: Role::User,
+            content: content.to_string(),
+        })
     }
 }
 

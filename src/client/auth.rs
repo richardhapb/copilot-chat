@@ -27,7 +27,7 @@ impl CopilotAuth {
 
     /// Retrieve the Copilot token from known directories
     /// By default, it looks in `~/.config/github-copilot/apps.json`
-    fn get_token_from_file<'a>(&'a mut self) -> anyhow::Result<Option<&'a str>> {
+    fn get_token_from_file(&mut self) -> anyhow::Result<Option<&str>> {
 
         // Return an existent token if exists
         if self.oauth_token.is_some() {

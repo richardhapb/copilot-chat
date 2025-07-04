@@ -5,7 +5,7 @@ use futures_util::Stream;
 pub trait Provider {
     async fn request(
         &self,
-        messages: &Vec<Message>,
+        messages: &[Message],
     ) -> anyhow::Result<impl Stream<Item = reqwest::Result<bytes::Bytes>>>;
 
     fn builder<'a>(&'a self, messages: &'a mut Vec<Message>) -> Builder<'a, Self>
@@ -80,7 +80,7 @@ pub(crate) mod tests {
     impl<'a> Provider for TestProvider<'a> {
         async fn request(
             &self,
-            messages: &Vec<crate::chat::Message>,
+            messages: &[crate::chat::Message],
         ) -> anyhow::Result<impl Stream<Item = reqwest::Result<bytes::Bytes>>> {
             let stream = TestStreamProvider::new(self.chunks, self.content);
             self.input_messages.replace(messages.to_owned());

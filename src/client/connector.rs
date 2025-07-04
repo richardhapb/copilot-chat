@@ -32,7 +32,7 @@ impl Provider for CopilotClient {
     /// Make a request to copilot, passing the message provided by the user
     async fn request(
         &self,
-        messages: &Vec<Message>,
+        messages: &[Message],
     ) -> anyhow::Result<impl Stream<Item = reqwest::Result<bytes::Bytes>>> {
         let headers = self.get_headers().await?;
 
@@ -131,5 +131,5 @@ struct CopilotBody<'a> {
     max_tokens: i32,
     model: String,
     stream: bool,
-    messages: &'a Vec<Message>,
+    messages: &'a [Message],
 }

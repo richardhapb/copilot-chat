@@ -56,19 +56,19 @@ pub trait Streamer: Clone + Send {
     ) -> anyhow::Result<Option<String>> {
         let chunks = chunk.split("\n\n");
 
-        for (i, chunk) in chunks.clone().into_iter().enumerate() {
+        for (i, chunk) in chunks.clone().enumerate() {
             if chunk.is_empty() {
                 continue;
             }
             let begin = "data: ".len();
             match serde_json::from_str::<CopilotResponse>(&chunk[begin..]) {
                 Ok(resp_msg) => {
-                    if let Some(choice) = resp_msg.choices.first() {
-                        if let Some(msg) = &choice.delta {
-                            let msg = msg.content.clone();
-                            destination.push_str(&msg);
-                            sender.send(msg).await?;
-                        }
+                    if let Some(choice) = resp_msg.choices.first()
+                        && let Some(msg) = &choice.delta
+                    {
+                        let msg = msg.content.clone();
+                        destination.push_str(&msg);
+                        sender.send(msg).await?;
                     }
                 }
                 Err(e) => {

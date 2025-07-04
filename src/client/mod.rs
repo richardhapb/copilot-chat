@@ -1,7 +1,7 @@
 
-mod client;
+mod connector;
 pub mod auth;
 pub mod provider;
 
-pub use client::CopilotClient;
+pub use connector::CopilotClient;
 
