@@ -26,10 +26,6 @@ async fn main() -> anyhow::Result<()> {
     // Dependencies
     let auth = client::auth::CopilotAuth::new();
     let client = client::CopilotClient::new(auth);
-    let mut chat = match Chat::try_load_chat(None)? {
-        Some(chat) => chat.with_provider(client),
-        None => Chat::new(client),
-    };
     let streamer = ChatStreamer;
     let writer = tokio::io::stdout();
 
@@ -48,7 +44,8 @@ async fn main() -> anyhow::Result<()> {
         None => None,
     };
 
-    let message_type = match cli.command {
+    // Get the message and chat; if the command is `commit`, a new chat is always used.
+    let (message_type, mut chat) = match cli.command {
         Some(Commands::Commit) => {
             // If there is not a stdin, try to get the git diff
             // in the current directory
@@ -64,13 +61,19 @@ async fn main() -> anyhow::Result<()> {
                     std::process::exit(1);
                 }
             }
-            MessageType::Commit(user_prompt)
+            (MessageType::Commit(user_prompt), Chat::new(client))
         }
         // Default
-        None => MessageType::Code {
-            user_prompt,
-            files: cli.files,
-        },
+        None => (
+            MessageType::Code {
+                user_prompt,
+                files: cli.files,
+            },
+            match Chat::try_load_chat(None)? {
+                Some(chat) => chat.with_provider(client),
+                None => Chat::new(client),
+            },
+        ),
     };
 
     // First message
