@@ -1,44 +1,9 @@
-use chrono::Local;
-use std::fmt::Display;
+use std::time::SystemTime;
+
+use super::diff::Range;
 
 use super::reader::{Readable, ReaderTool};
 use serde::{Deserialize, Serialize};
-
-/// The lines range of the file
-#[derive(Debug, Clone)]
-pub struct FileRange {
-    start: usize,
-    end: usize,
-}
-
-impl Display for FileRange {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, ":{}-{}", self.start, self.end)
-    }
-}
-
-impl Default for FileRange {
-    fn default() -> Self {
-        Self { start: 1, end: 0 }
-    }
-}
-
-impl FileRange {
-    pub fn from_file_arg(arg: &str) -> Option<Self> {
-        if let Some((_, range)) = arg.split_once(":") {
-            if let Some((start, end)) = range.split_once("-") {
-                let start = start.parse().unwrap_or(1);
-                // 0 means at the end of the file
-                let end = end.parse().unwrap_or(0);
-                Some(Self { start, end })
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    }
-}
 
 impl Readable for TrackedFile {
     fn location(&self) -> &str {
@@ -49,8 +14,12 @@ impl Readable for TrackedFile {
         &self.content
     }
 
-    fn modified_time(&self) -> &chrono::DateTime<Local> {
+    fn modified_time(&self) -> &SystemTime {
         &self.last_modification
+    }
+
+    fn set_modified_time(&mut self, new_time: SystemTime) {
+        self.last_modification = new_time
     }
 
     fn set_content(&mut self, content: String) {
@@ -59,11 +28,21 @@ impl Readable for TrackedFile {
 }
 
 /// Read a file content and handle all file-related context
-#[derive(Debug, Deserialize, Serialize, PartialEq, Default)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 pub struct TrackedFile {
     pub path: String,
     content: String,
-    last_modification: chrono::DateTime<Local>,
+    last_modification: SystemTime,
+}
+
+impl Default for TrackedFile {
+    fn default() -> Self {
+        Self {
+            path: "".into(),
+            content: "".into(),
+            last_modification: SystemTime::now(),
+        }
+    }
 }
 
 pub struct FileReader;
@@ -74,6 +53,8 @@ impl ReaderTool for FileReader {
         let content = std::fs::read_to_string(file_path)?;
 
         readable.set_content(content);
+        let meta = std::fs::metadata(readable.location())?;
+        readable.set_modified_time(meta.modified()?.clone());
 
         Ok(readable.content())
     }
@@ -87,7 +68,7 @@ impl TrackedFile {
             Self {
                 path,
                 content: String::new(),
-                last_modification: chrono::Local::now(),
+                last_modification: SystemTime::now(),
             }
         } else {
             Self::default()
@@ -97,7 +78,7 @@ impl TrackedFile {
     /// Get the clean file path by removing the range if it exists; if there is no range,
     /// returns the argument itself. e.g. /path/to/file:10-20 -> /path/to/file
     pub fn from_file_arg(arg: &str) -> Self {
-        let last_modification = chrono::Local::now();
+        let last_modification = SystemTime::now();
         if let Some((path, _)) = arg.split_once(":") {
             Self {
                 path: path.to_string(),
@@ -124,10 +105,7 @@ impl TrackedFile {
 
     /// Prepare the necesary data for copilot
     /// - Add the file name and indicate the range selected by the user
-    pub async fn prepare_for_copilot(
-        &mut self,
-        range: Option<&FileRange>,
-    ) -> anyhow::Result<String> {
+    pub async fn prepare_for_copilot(&mut self, range: Option<&Range>) -> anyhow::Result<String> {
         if let Some(range) = range {
             let mut range_str = range.to_string();
             if range.end == 0 {
@@ -150,10 +128,19 @@ mod tests {
     use std::fs::File;
     use std::io::Write;
 
-    #[derive(Default)]
+    #[derive(Debug)]
     struct MockFile {
         content: String,
-        _timemod: chrono::DateTime<Local>,
+        _timemod: SystemTime,
+    }
+
+    impl Default for MockFile {
+        fn default() -> Self {
+            Self {
+                content: "".into(),
+                _timemod: SystemTime::now(),
+            }
+        }
     }
 
     impl Readable for MockFile {
@@ -171,12 +158,16 @@ mod tests {
             self.content = content
         }
 
-        fn modified_time(&self) -> &chrono::DateTime<Local> {
+        fn modified_time(&self) -> &SystemTime {
             &self._timemod
         }
 
         fn content<'a>(&'a self) -> &'a str {
             &self.content
+        }
+
+        fn set_modified_time(&mut self, new_time: SystemTime) {
+            self._timemod = new_time
         }
     }
 
@@ -195,7 +186,7 @@ mod tests {
 
     #[test]
     fn extract_range() {
-        let range = FileRange::from_file_arg("/path/to/file:20-30");
+        let range = Range::from_file_arg("/path/to/file:20-30");
 
         assert!(range.is_some());
         let range = range.expect("valid range");
@@ -235,15 +226,12 @@ mod tests {
         file_tracked.content = readable.content().into();
         file_tracked.path = readable.location().into();
 
-        let range = FileRange::from_file_arg(&format!("{}:1-2", readable.location()));
+        let range = Range::from_file_arg(&format!("{}:1-2", readable.location()));
         let prepared = file_tracked
             .prepare_for_copilot(range.as_ref())
             .await
             .expect("prepare the request");
 
-        assert_eq!(
-            prepared,
-            "File: /tmp/copilot-test:1-2"
-        )
+        assert_eq!(prepared, "File: /tmp/copilot-test:1-2")
     }
 }

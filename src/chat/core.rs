@@ -12,7 +12,8 @@ use crate::{
     chat::prompts::GENERAL,
     client::provider::Provider,
     tools::{
-        files::{FileRange, FileReader, TrackedFile},
+        diff::Range,
+        files::{FileReader, TrackedFile},
         reader::ReaderTool,
     },
 };
@@ -134,7 +135,7 @@ impl<P: Provider + Default> Chat<P> {
                     for file in files {
                         let mut tracked_file = TrackedFile::from_file_arg(&file);
 
-                        let range = FileRange::from_file_arg(&file);
+                        let range = Range::from_file_arg(&file);
                         let reader = FileReader;
                         reader.read(&mut tracked_file).await?;
 
