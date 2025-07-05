@@ -54,7 +54,7 @@ impl ReaderTool for FileReader {
 
         readable.set_content(content);
         let meta = std::fs::metadata(readable.location())?;
-        readable.set_modified_time(meta.modified()?.clone());
+        readable.set_modified_time(meta.modified()?);
 
         Ok(readable.content())
     }

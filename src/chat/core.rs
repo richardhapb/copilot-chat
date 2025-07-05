@@ -12,9 +12,9 @@ use crate::{
     chat::prompts::GENERAL,
     client::provider::Provider,
     tools::{
-        diff::Range,
+        diff::{DiffsManager, Range},
         files::{FileReader, TrackedFile},
-        reader::ReaderTool,
+        reader::{Readable, ReaderTool},
     },
 };
 use percent_encoding::{NON_ALPHANUMERIC, percent_encode};
@@ -147,7 +147,13 @@ impl<P: Provider + Default> Chat<P> {
                                 role: Role::User,
                             })
                         } else {
-                            builder
+                            // If it is tracked, check for differences and insert them.
+                            let diff_man = reader.get_diffs(&tracked_file)?;
+                            if let Some(diff_man) = diff_man {
+                                builder.with_diffs(&diff_man, tracked_file.location())
+                            } else {
+                                builder
+                            }
                         };
 
                         builder = builder.with(Message {
@@ -270,6 +276,25 @@ impl<'a, P: Provider> Builder<'a, P> {
         Output = anyhow::Result<impl futures_util::Stream<Item = reqwest::Result<bytes::Bytes>>>,
     > {
         self.client.request(self.messages)
+    }
+
+    pub fn with_diffs(self, diff_man: &DiffsManager, filename: &str) -> Self {
+        if diff_man.diffs.is_empty() {
+            return self;
+        }
+
+        let mut content = format!("Here the updates of the file {filename}:\n\n");
+
+        for diff in diff_man.diffs.iter() {
+            content.push_str(&diff.to_string());
+        }
+
+        let message = Message {
+            role: Role::User,
+            content,
+        };
+        self.messages.borrow_mut().push(message);
+        self
     }
 }
 
