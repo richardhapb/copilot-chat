@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+
 use futures_util::Stream;
 
 use crate::chat::Message;
@@ -32,7 +34,7 @@ impl Provider for CopilotClient {
     /// Make a request to copilot, passing the message provided by the user
     async fn request(
         &self,
-        messages: &[Message],
+        messages: &RefCell<Vec<Message>>,
     ) -> anyhow::Result<impl Stream<Item = reqwest::Result<bytes::Bytes>>> {
         let headers = self.get_headers().await?;
 
@@ -131,5 +133,5 @@ struct CopilotBody<'a> {
     max_tokens: i32,
     model: String,
     stream: bool,
-    messages: &'a [Message],
+    messages: &'a RefCell<Vec<Message>>,
 }

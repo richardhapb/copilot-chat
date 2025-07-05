@@ -1,4 +1,5 @@
 use std::{
+    cell::RefCell,
     env::current_dir,
     fmt::Display,
     fs::{File, create_dir_all},
@@ -11,7 +12,7 @@ use crate::{
     chat::prompts::GENERAL,
     client::provider::Provider,
     tools::{
-        files::{FileRange, FileReader},
+        files::{FileRange, FileReader, TrackedFile},
         reader::ReaderTool,
     },
 };
@@ -28,10 +29,10 @@ use super::{
 /// Main Chat structure, contains all chat-related attributes and methods
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Chat<P: Provider> {
-    messages: Vec<Message>,
+    messages: RefCell<Vec<Message>>,
     #[serde(skip)]
     provider: P,
-    tracked_files: Vec<String>,
+    tracked_files: Vec<TrackedFile>,
 }
 
 impl<P: Provider + Default> Chat<P> {
@@ -39,7 +40,7 @@ impl<P: Provider + Default> Chat<P> {
     pub fn new(provider: P) -> Self {
         Self {
             // All the messages of the chat
-            messages: vec![],
+            messages: vec![].into(),
 
             // Provider wich connect with the API
             provider,
@@ -52,8 +53,15 @@ impl<P: Provider + Default> Chat<P> {
         self
     }
 
-    pub fn add_message(&mut self, message: Message) {
-        self.messages.push(message);
+    pub fn add_message(&self, message: Message) {
+        self.messages.borrow_mut().push(message);
+    }
+
+    pub fn tracked_paths(&self) -> Vec<&str> {
+        self.tracked_files
+            .iter()
+            .map(|t| t.path.as_str())
+            .collect::<Vec<&str>>()
     }
 
     /// Try to load a chat for the currenct directory
@@ -92,8 +100,8 @@ impl<P: Provider + Default> Chat<P> {
         streamer: impl Streamer + 'static,
         mut writer: impl AsyncWrite + Send + Unpin + 'static,
     ) -> anyhow::Result<Message> {
-        let builder = self.provider.builder(&mut self.messages);
-        let builder = if builder.messages.is_empty() {
+        let builder = self.provider.builder(&self.messages);
+        let builder = if builder.messages.borrow().is_empty() {
             // Create the inital prompt if not exists
             builder.with(Message {
                 role: Role::User,
@@ -124,17 +132,17 @@ impl<P: Provider + Default> Chat<P> {
                 // Add the files to copilot prompt
                 if let Some(files) = files {
                     for file in files {
-                        let mut reader = FileReader::from_file_arg(&file);
+                        let mut tracked_file = TrackedFile::from_file_arg(&file);
 
                         let range = FileRange::from_file_arg(&file);
-                        let readable = reader.get_readable();
-                        reader.read(&readable).await?;
+                        let reader = FileReader;
+                        reader.read(&mut tracked_file).await?;
 
-                        // If the file is not tracked tracked, send it once
-                        builder = if !self.tracked_files.contains(&reader.path) {
-                            self.tracked_files.push(reader.path.clone());
+                        // If the file is not tracked, send it once.
+                        builder = if !self.tracked_paths().contains(&tracked_file.path.as_str()) {
+                            self.tracked_files.push(TrackedFile::from_file_arg(&file));
                             builder.with(Message {
-                                content: reader.prepare_load_once(&readable).await?,
+                                content: tracked_file.prepare_load_once().await?,
                                 role: Role::User,
                             })
                         } else {
@@ -142,9 +150,7 @@ impl<P: Provider + Default> Chat<P> {
                         };
 
                         builder = builder.with(Message {
-                            content: reader
-                                .prepare_for_copilot(&readable, range.as_ref())
-                                .await?,
+                            content: tracked_file.prepare_for_copilot(range.as_ref()).await?,
                             role: Role::User,
                         })
                     }
@@ -228,13 +234,13 @@ pub enum Role {
 /// A builder for the initial prompt
 pub struct Builder<'a, P: Provider> {
     client: &'a P,
-    messages: &'a mut Vec<Message>,
+    messages: &'a RefCell<Vec<Message>>,
 }
 
 impl<'a, P: Provider> Provider for Builder<'a, P> {
     fn request(
         &self,
-        messages: &[Message],
+        messages: &RefCell<Vec<Message>>,
     ) -> impl Future<
         Output = anyhow::Result<impl futures_util::Stream<Item = reqwest::Result<bytes::Bytes>>>,
     > {
@@ -243,7 +249,7 @@ impl<'a, P: Provider> Provider for Builder<'a, P> {
 }
 
 impl<'a, P: Provider> Builder<'a, P> {
-    pub fn new(provider: &'a P, messages: &'a mut Vec<Message>) -> Self {
+    pub fn new(provider: &'a P, messages: &'a RefCell<Vec<Message>>) -> Self {
         Self {
             client: provider,
             messages,
@@ -252,7 +258,7 @@ impl<'a, P: Provider> Builder<'a, P> {
 
     /// Append a message to the builder
     pub fn with(self, message: Message) -> Self {
-        self.messages.push(message);
+        self.messages.borrow_mut().push(message);
 
         self
     }
@@ -420,7 +426,7 @@ mod tests {
     fn save_and_load_chat() {
         let file = "/tmp";
         let provider = TestProvider::new(0, "");
-        let mut chat1 = Chat::new(provider);
+        let chat1 = Chat::new(provider);
 
         chat1.add_message(Message {
             content: "Hello".to_string(),
@@ -442,11 +448,13 @@ mod tests {
         assert_eq!(
             chat1
                 .messages
+                .borrow()
                 .first()
                 .expect("first message in chat 1")
                 .content,
             chat2
                 .messages
+                .borrow()
                 .first()
                 .expect("first message in chat 2")
                 .content
@@ -455,11 +463,13 @@ mod tests {
         assert_eq!(
             chat1
                 .messages
+                .borrow()
                 .first()
                 .expect("first message in chat 1")
                 .role,
             chat2
                 .messages
+                .borrow()
                 .first()
                 .expect("first message in chat 2")
                 .role

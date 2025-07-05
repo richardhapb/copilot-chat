@@ -1,8 +1,8 @@
+use chrono::Local;
 use std::fmt::Display;
 
-use tokio::{fs::File, io::AsyncReadExt};
-
 use super::reader::{Readable, ReaderTool};
+use serde::{Deserialize, Serialize};
 
 /// The lines range of the file
 #[derive(Debug, Clone)]
@@ -40,35 +40,46 @@ impl FileRange {
     }
 }
 
-pub struct FileReadable {
-    path: String,
-}
-
-impl Readable for FileReadable {
+impl Readable for TrackedFile {
     fn location(&self) -> &str {
         &self.path
+    }
+
+    fn content(&self) -> &str {
+        &self.content
+    }
+
+    fn modified_time(&self) -> &chrono::DateTime<Local> {
+        &self.last_modification
+    }
+
+    fn set_content(&mut self, content: String) {
+        self.content = content
     }
 }
 
 /// Read a file content and handle all file-related context
-#[derive(Debug, Default, Clone)]
-pub struct FileReader {
+#[derive(Debug, Deserialize, Serialize, PartialEq, Default)]
+pub struct TrackedFile {
     pub path: String,
     content: String,
+    last_modification: chrono::DateTime<Local>,
 }
 
+pub struct FileReader;
+
 impl ReaderTool for FileReader {
-    async fn read(&mut self, readable: &impl Readable) -> anyhow::Result<()> {
+    async fn read<'a>(&self, readable: &'a mut impl Readable) -> anyhow::Result<&'a str> {
         let file_path = readable.location();
-        let mut file = File::open(file_path).await?;
+        let content = std::fs::read_to_string(file_path)?;
 
-        file.read_to_string(&mut self.content).await?;
+        readable.set_content(content);
 
-        Ok(())
+        Ok(readable.content())
     }
 }
 
-impl FileReader {
+impl TrackedFile {
     /// Get a new `FileReader`
     #[allow(dead_code)]
     pub fn new(path: Option<String>) -> Self {
@@ -76,6 +87,7 @@ impl FileReader {
             Self {
                 path,
                 content: String::new(),
+                last_modification: chrono::Local::now(),
             }
         } else {
             Self::default()
@@ -85,62 +97,37 @@ impl FileReader {
     /// Get the clean file path by removing the range if it exists; if there is no range,
     /// returns the argument itself. e.g. /path/to/file:10-20 -> /path/to/file
     pub fn from_file_arg(arg: &str) -> Self {
+        let last_modification = chrono::Local::now();
         if let Some((path, _)) = arg.split_once(":") {
             Self {
                 path: path.to_string(),
                 content: String::new(),
+                last_modification,
             }
         } else {
             Self {
                 path: arg.to_string(),
                 content: String::new(),
+                last_modification,
             }
         }
-    }
-
-    pub fn get_readable(&self) -> FileReadable {
-        FileReadable {
-            path: self.path.clone(),
-        }
-    }
-
-    /// Add the line number to each line
-    ///
-    /// Example:
-    ///     ```rust
-    ///     let reader = FileReader::new(Some("Hello\nWelcome to Copilot\nTell me something".to_string()));
-    ///     let numered = reader.add_line_numbers();
-    ///
-    ///     assert_eq!(numered, "1: Hello\n2: Welcome to Copilot\n3: Tell me something\n")
-    ///     ````
-    pub fn add_line_numbers(&self) -> String {
-        let mut new_content = String::new();
-        for (i, line) in self.content.lines().enumerate() {
-            let numered = format!("{}: {}\n", i + 1, line);
-            new_content.push_str(&numered);
-        }
-
-        new_content
     }
 
     /// Prepare all the necesary data for copilot
     /// - Read the file
     /// - Add the line number for each line
     /// - Add the file name and indicate the range selected by the user
-    pub async fn prepare_load_once(&mut self, readable: &impl Readable) -> anyhow::Result<String> {
-        self.read(readable).await?;
+    pub async fn prepare_load_once(&self) -> anyhow::Result<String> {
         let numbered = self.add_line_numbers();
-        Ok(format!("File: {} [load-once]\n\n{}", readable.location(), numbered))
+        Ok(format!("File: {} [load-once]\n\n{}", self.path, numbered))
     }
 
     /// Prepare the necesary data for copilot
     /// - Add the file name and indicate the range selected by the user
     pub async fn prepare_for_copilot(
         &mut self,
-        readable: &impl Readable,
         range: Option<&FileRange>,
     ) -> anyhow::Result<String> {
-        self.read(readable).await?;
         if let Some(range) = range {
             let mut range_str = range.to_string();
             if range.end == 0 {
@@ -150,9 +137,9 @@ impl FileReader {
                     .0
                     .to_string();
             }
-            Ok(format!("File: {}{}", readable.location(), range_str,))
+            Ok(format!("File: {}{}", self.path, range_str,))
         } else {
-            Ok(format!("File: {}", readable.location()))
+            Ok(format!("File: {}", self.path))
         }
     }
 }
@@ -163,7 +150,12 @@ mod tests {
     use std::fs::File;
     use std::io::Write;
 
-    struct MockFile;
+    #[derive(Default)]
+    struct MockFile {
+        content: String,
+        _timemod: chrono::DateTime<Local>,
+    }
+
     impl Readable for MockFile {
         fn location(&self) -> &str {
             let temp = "/tmp/copilot-test";
@@ -174,14 +166,26 @@ mod tests {
 
             temp
         }
+
+        fn set_content(&mut self, content: String) {
+            self.content = content
+        }
+
+        fn modified_time(&self) -> &chrono::DateTime<Local> {
+            &self._timemod
+        }
+
+        fn content<'a>(&'a self) -> &'a str {
+            &self.content
+        }
     }
 
     #[tokio::test]
     async fn numbered_lines() {
-        let mut reader = FileReader::new(None);
-        let readable = MockFile;
-        reader.read(&readable).await.expect("read the file");
-        let numbered = reader.add_line_numbers();
+        let reader = FileReader;
+        let mut readable = MockFile::default();
+        let _ = reader.read(&mut readable).await.expect("read the file");
+        let numbered = readable.add_line_numbers();
 
         assert_eq!(
             numbered,
@@ -200,19 +204,46 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prepare() {
-        let readable = MockFile;
-        let mut reader = FileReader::new(None);
-        reader.read(&readable).await.expect("read the file");
-        let range = FileRange::from_file_arg(&format!("{}:1-2", readable.location()));
-        let prepared = reader
-            .prepare_for_copilot(&readable, range.as_ref())
+    async fn prepare_once() {
+        let mut readable = MockFile::default();
+        let mut file_tracked = TrackedFile::new(None);
+        let reader = FileReader;
+        reader.read(&mut readable).await.expect("read the file");
+
+        file_tracked.set_content(readable.content.clone());
+        file_tracked.path = readable.location().into();
+
+        let prepared = file_tracked
+            .prepare_load_once()
             .await
             .expect("prepare the request");
 
         assert_eq!(
             prepared,
-            "File: /tmp/copilot-test:1-2\n\n1: Hello\n2: Welcome to Copilot\n3: Tell me something\n4: Hello\n5: Welcome to Copilot\n6: Tell me something\n"
+            "File: /tmp/copilot-test [load-once]\n\n1: Hello\n2: Welcome to Copilot\n3: Tell me something\n"
+        )
+    }
+
+    #[tokio::test]
+    async fn prepare_copilot() {
+        let mut readable = MockFile::default();
+        let mut file_tracked = TrackedFile::new(None);
+        let reader = FileReader;
+
+        reader.read(&mut readable).await.expect("read the file");
+
+        file_tracked.content = readable.content().into();
+        file_tracked.path = readable.location().into();
+
+        let range = FileRange::from_file_arg(&format!("{}:1-2", readable.location()));
+        let prepared = file_tracked
+            .prepare_for_copilot(range.as_ref())
+            .await
+            .expect("prepare the request");
+
+        assert_eq!(
+            prepared,
+            "File: /tmp/copilot-test:1-2"
         )
     }
 }
