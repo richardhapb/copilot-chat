@@ -20,7 +20,7 @@ static USER_AGENT: &str = "curl/8.7.1";
 static MODELS: &str = "https://api.githubcopilot.com/models";
 
 /// Main Copilot client
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct CopilotClient {
     auth: CopilotAuth,
     client: reqwest::Client,
