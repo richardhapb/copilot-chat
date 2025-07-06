@@ -1,5 +1,6 @@
 use super::diff::LineSequence;
 use std::time::SystemTime;
+use tracing::debug;
 
 use crate::tools::diff::DiffsManager;
 
@@ -52,11 +53,17 @@ pub trait ReaderTool {
         &self,
         readable: &impl Readable,
     ) -> anyhow::Result<Option<DiffsManager>> {
+        debug!("Verifying if it is necessary to compute the diffs. {}", readable.location());
         let meta = std::fs::metadata(readable.location());
+        debug!(?meta, "metadata");
 
         // If there is not metadata, probably the file doesn't exist anymore
         if let Ok(meta) = meta {
+            debug!(?meta, "Metadata found");
+            debug!("Modified time in memory: {:#?}", *readable.modified_time());
+            debug!("Modified time in file system: {:#?}", meta.modified()?);
             if *readable.modified_time() >= meta.modified()? {
+                debug!("File up to date, skipping diff computation");
                 return Ok(None);
             }
 
@@ -69,8 +76,20 @@ pub trait ReaderTool {
 
             Ok(Some(diffs))
         } else {
+            debug!("Metadata not found, skipping diff computation");
             // TODO: Consider return all the file as a diff
             Ok(None)
         }
+    }
+
+
+    fn update_modified_time(&self, readable: &mut impl Readable) -> anyhow::Result<()> {
+        debug!(?readable, "Updating modified time");
+
+        let meta = std::fs::metadata(readable.location())?;
+        readable.set_modified_time(meta.modified()?);
+        debug!(?meta, "Updated");
+
+        Ok(())
     }
 }

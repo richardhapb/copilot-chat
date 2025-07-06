@@ -20,7 +20,7 @@ use crate::{
 use percent_encoding::{NON_ALPHANUMERIC, percent_encode};
 use serde::{Deserialize, Serialize};
 use tokio::{io::AsyncWrite, sync::mpsc::channel};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, trace};
 
 use super::{
     prompts::{CODE, COMMIT, GIT},
@@ -58,6 +58,7 @@ impl<P: Provider + Default> Chat<P> {
         self.messages.borrow_mut().push(message);
     }
 
+    #[allow(dead_code)]
     pub fn tracked_paths(&self) -> Vec<&str> {
         self.tracked_files
             .iter()
@@ -134,28 +135,58 @@ impl<P: Provider + Default> Chat<P> {
                 // Add the files to copilot prompt
                 if let Some(files) = files {
                     for file in files {
-                        let mut tracked_file = TrackedFile::from_file_arg(&file);
+                        debug!(%file, "Processing file");
 
-                        let range = Range::from_file_arg(&file);
+                        let mut tracked = true;
+
+                        // Try to get the file from history
+                        let mut tracked_file = self
+                            .tracked_files
+                            .iter()
+                            .cloned()
+                            .filter(|p| p.path == file)
+                            .next()
+                            .unwrap_or_else(|| {
+                                debug!(%file, "File not tracked, creating a new tracked file instance");
+                                tracked = false;
+                                TrackedFile::from_file_arg(&file)
+                            });
+
+                        debug!(?tracked_file);
+
                         let reader = FileReader;
-                        reader.read(&mut tracked_file).await?;
+                        let range = Range::from_file_arg(&file);
+
+                        if tracked_file.content().is_empty() {
+                            debug!("Content empty, reading from file");
+                            reader.read(&mut tracked_file).await?;
+                        }
+
+                        let file_path = tracked_file.location();
 
                         // If the file is not tracked, send it once.
-                        builder = if !self.tracked_paths().contains(&tracked_file.path.as_str()) {
+                        builder = if !tracked {
+                            info!(?file_path, "File not tracked, sending to copilot");
                             self.tracked_files.push(TrackedFile::from_file_arg(&file));
                             builder.with(Message {
                                 content: tracked_file.prepare_load_once().await?,
                                 role: Role::User,
                             })
                         } else {
+                            info!(?file_path, "File tracked, checking for differences");
                             // If it is tracked, check for differences and insert them.
                             let diff_man = reader.get_diffs(&tracked_file)?;
                             if let Some(diff_man) = diff_man {
+                                info!("Differences found, sending to copilot");
+                                debug!(?diff_man, "differences");
                                 builder.with_diffs(&diff_man, tracked_file.location())
                             } else {
+                                debug!(?diff_man, "No differences found, skipping the update.");
                                 builder
                             }
                         };
+
+                        reader.update_modified_time(&mut tracked_file)?;
 
                         builder = builder.with(Message {
                             content: tracked_file.prepare_for_copilot(range.as_ref()).await?,
@@ -168,6 +199,7 @@ impl<P: Provider + Default> Chat<P> {
             _ => builder,
         };
 
+        trace!("sending request to copilot");
         let stream = builder.request(model.unwrap_or("gpt-4o")).await?;
 
         debug!("Creating channels");
@@ -317,6 +349,7 @@ impl<'a, P: Provider> Builder<'a, P> {
 
     pub fn with_diffs(self, diff_man: &DiffsManager, filename: &str) -> Self {
         if diff_man.diffs.is_empty() {
+            debug!("There is not differences, skipping attach them");
             return self;
         }
 
@@ -330,6 +363,8 @@ impl<'a, P: Provider> Builder<'a, P> {
             role: Role::User,
             content,
         };
+
+        debug!(?message, "Attaching differences");
         self.messages.borrow_mut().push(message);
         self
     }

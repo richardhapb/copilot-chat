@@ -4,6 +4,7 @@ use super::diff::Range;
 
 use super::reader::{Readable, ReaderTool};
 use serde::{Deserialize, Serialize};
+use tracing::debug;
 
 impl Readable for TrackedFile {
     fn location(&self) -> &str {
@@ -28,7 +29,7 @@ impl Readable for TrackedFile {
 }
 
 /// Read a file content and handle all file-related context
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Clone)]
 pub struct TrackedFile {
     pub path: String,
     content: String,
@@ -52,9 +53,8 @@ impl ReaderTool for FileReader {
         let file_path = readable.location();
         let content = std::fs::read_to_string(file_path)?;
 
+        debug!(?file_path, "Updating content");
         readable.set_content(content);
-        let meta = std::fs::metadata(readable.location())?;
-        readable.set_modified_time(meta.modified()?);
 
         Ok(readable.content())
     }
@@ -78,19 +78,21 @@ impl TrackedFile {
     /// Get the clean file path by removing the range if it exists; if there is no range,
     /// returns the argument itself. e.g. /path/to/file:10-20 -> /path/to/file
     pub fn from_file_arg(arg: &str) -> Self {
-        let last_modification = SystemTime::now();
-        if let Some((path, _)) = arg.split_once(":") {
-            Self {
-                path: path.to_string(),
-                content: String::new(),
-                last_modification,
-            }
+        let path = if let Some((path, _)) = arg.split_once(':') {
+            path.to_string()
         } else {
-            Self {
-                path: arg.to_string(),
-                content: String::new(),
-                last_modification,
-            }
+            arg.to_string()
+        };
+
+        let last_modification = std::fs::metadata(&path)
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+            .unwrap_or_else(SystemTime::now);
+
+        Self {
+            path,
+            content: String::new(),
+            last_modification,
         }
     }
 

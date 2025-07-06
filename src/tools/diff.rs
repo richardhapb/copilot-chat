@@ -1,5 +1,7 @@
 use std::fmt::Display;
+use std::time::Instant;
 use std::{collections::HashMap, ops::Index, str::Lines};
+use tracing::{debug, trace};
 
 /// The type of a difference and its content owns the String because the read data is not owned
 /// for any other element.
@@ -31,6 +33,8 @@ pub struct DiffsManager {
 
 impl DiffsManager {
     pub fn from_myers_algorithm(seq1: LineSequence, seq2: LineSequence) -> DiffsManager {
+        debug!("Computing myers algorithm");
+        let init_time = Instant::now();
         let (x_axis_len, y_axis_len) = (seq1.len(), seq2.len());
         let max = (x_axis_len + y_axis_len) as i32;
 
@@ -93,23 +97,32 @@ impl DiffsManager {
 
             while x > prev_x && y > prev_y {
                 edits.push(Diff::Match((x, seq1.lines[x - 1].to_string())));
+                trace!(%x,"Inserted: Match line");
                 x -= 1;
                 y -= 1;
             }
 
             if x == prev_x {
                 edits.push(Diff::Insert((y, seq2.lines[y - 1].to_string())));
+                trace!(%y,"Inserted: Insert line");
                 y -= 1;
             } else {
                 edits.push(Diff::Delete((x, seq1.lines[x - 1].to_string())));
+                trace!(%x,"Inserted: Delete line");
                 x -= 1;
             }
         }
 
         edits.reverse();
-        Self {
-            diffs: edits,
-        }
+
+        debug!(
+            "{} differences processed in {:.2} milliseconds and d: {}",
+            edits.len(),
+            init_time.elapsed().as_millis(),
+            final_d
+        );
+
+        Self { diffs: edits }
     }
 }
 
@@ -216,6 +229,12 @@ impl<'a> LineSequence<'a> {
                 (*entry, line)
             })
             .unzip();
+
+        debug!(
+            "Processing lines with lengths: {} and {}",
+            lines_vec1.len(),
+            lines_vec2.len()
+        );
 
         (
             Self {

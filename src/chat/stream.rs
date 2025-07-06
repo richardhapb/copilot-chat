@@ -5,7 +5,7 @@ use futures_util::{Stream, StreamExt};
 use serde::Deserialize;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tracing::debug;
+use tracing::{debug, trace};
 
 /// Handle the stream and all related actions. Use channels to communicate with the
 /// caller and write the content to the `writer`.
@@ -28,7 +28,7 @@ pub trait Streamer: Clone + Send {
         debug!("Opening stream");
         let mut partial_chunk = None;
         while let Some(chunk) = stream.next().await {
-            debug!(?chunk, "processing");
+            trace!(?chunk, "processing");
             let chunk = chunk?;
 
             let mut chunk_str = String::from_utf8_lossy(&chunk);
