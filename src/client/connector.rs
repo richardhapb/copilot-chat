@@ -82,7 +82,7 @@ struct ModelsResponse {
 
 #[derive(Deserialize, Debug)]
 struct ModelsRawResponse {
-    data: Vec<ModelsResponse>
+    data: Vec<ModelsResponse>,
 }
 
 impl Provider for CopilotClient {

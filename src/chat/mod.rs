@@ -1,5 +1,5 @@
 mod core;
-mod stream;
 pub mod prompts;
-pub use core::{Chat, Role, Message, Builder, MessageType};
+mod stream;
+pub use core::{Builder, Chat, Message, MessageType, Role};
 pub use stream::ChatStreamer;

@@ -28,7 +28,6 @@ impl CopilotAuth {
     /// Retrieve the Copilot token from known directories
     /// By default, it looks in `~/.config/github-copilot/apps.json`
     fn get_token_from_file(&mut self) -> anyhow::Result<Option<&str>> {
-
         // Return an existent token if exists
         if self.oauth_token.is_some() {
             return Ok(self.oauth_token.as_deref());
@@ -37,10 +36,7 @@ impl CopilotAuth {
         debug!("Token not found; searching for it in the file.");
 
         let config_path = dirs::home_dir().expect("path is resolved");
-        let copilot_file = config_path
-            .join(".config")
-            .join("github-copilot")
-            .join("apps.json");
+        let copilot_file = config_path.join(".config").join("github-copilot").join("apps.json");
 
         debug!(?copilot_file, "Looking for token");
 
@@ -56,7 +52,7 @@ impl CopilotAuth {
 
         let clean_str = match file_str[14..].split_once(":") {
             Some(substr) => substr.1.trim()[..substr.1.trim().len() - 1].to_string(),
-            None => file_str.clone()
+            None => file_str.clone(),
         };
 
         trace!(%clean_str);

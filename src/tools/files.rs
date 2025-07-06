@@ -55,6 +55,7 @@ impl ReaderTool for FileReader {
 
         debug!(?file_path, "Updating content");
         readable.set_content(content);
+        self.update_modified_time(readable)?;
 
         Ok(readable.content())
     }
@@ -111,11 +112,7 @@ impl TrackedFile {
         if let Some(range) = range {
             let mut range_str = range.to_string();
             if range.end == 0 {
-                range_str = range_str
-                    .split_once("-")
-                    .unwrap_or((&range_str, ""))
-                    .0
-                    .to_string();
+                range_str = range_str.split_once("-").unwrap_or((&range_str, "")).0.to_string();
             }
             Ok(format!("File: {}{}", self.path, range_str,))
         } else {
@@ -180,10 +177,7 @@ mod tests {
         let _ = reader.read(&mut readable).await.expect("read the file");
         let numbered = readable.add_line_numbers();
 
-        assert_eq!(
-            numbered,
-            "1: Hello\n2: Welcome to Copilot\n3: Tell me something\n"
-        )
+        assert_eq!(numbered, "1: Hello\n2: Welcome to Copilot\n3: Tell me something\n")
     }
 
     #[test]
@@ -206,10 +200,7 @@ mod tests {
         file_tracked.set_content(readable.content.clone());
         file_tracked.path = readable.location().into();
 
-        let prepared = file_tracked
-            .prepare_load_once()
-            .await
-            .expect("prepare the request");
+        let prepared = file_tracked.prepare_load_once().await.expect("prepare the request");
 
         assert_eq!(
             prepared,

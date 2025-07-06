@@ -49,11 +49,11 @@ pub trait ReaderTool {
     /// - **D** is the number of differences (i.e., insertions and deletions) between them.
     ///
     /// This method is efficient for practical use cases and provides minimal diffs even in large files.
-    fn get_diffs(
-        &self,
-        readable: &impl Readable,
-    ) -> anyhow::Result<Option<DiffsManager>> {
-        debug!("Verifying if it is necessary to compute the diffs. {}", readable.location());
+    fn get_diffs(&self, readable: &impl Readable) -> anyhow::Result<Option<DiffsManager>> {
+        debug!(
+            "Verifying if it is necessary to compute the diffs. {}",
+            readable.location()
+        );
         let meta = std::fs::metadata(readable.location());
         debug!(?meta, "metadata");
 
@@ -69,8 +69,7 @@ pub trait ReaderTool {
 
             let memory_content = readable.content();
             let file_content = std::fs::read_to_string(readable.location())?;
-            let (seq1, seq2) =
-                LineSequence::from_lines(memory_content.lines(), file_content.lines());
+            let (seq1, seq2) = LineSequence::from_lines(memory_content.lines(), file_content.lines());
 
             let diffs = DiffsManager::from_myers_algorithm(seq1, seq2);
 
@@ -82,9 +81,8 @@ pub trait ReaderTool {
         }
     }
 
-
     fn update_modified_time(&self, readable: &mut impl Readable) -> anyhow::Result<()> {
-        debug!(?readable, "Updating modified time");
+        debug!("Updating modified time. {}", readable.location());
 
         let meta = std::fs::metadata(readable.location())?;
         readable.set_modified_time(meta.modified()?);

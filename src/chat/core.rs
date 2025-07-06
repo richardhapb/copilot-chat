@@ -77,9 +77,7 @@ impl<P: Provider + Default> Chat<P> {
 
         let cwd = current_dir()?;
         let encoded = percent_encode(
-            cwd.to_str()
-                .ok_or(anyhow::anyhow!("error encoding path"))?
-                .as_bytes(),
+            cwd.to_str().ok_or(anyhow::anyhow!("error encoding path"))?.as_bytes(),
             NON_ALPHANUMERIC,
         );
 
@@ -104,97 +102,96 @@ impl<P: Provider + Default> Chat<P> {
         mut writer: impl AsyncWrite + Send + Unpin + 'static,
     ) -> anyhow::Result<Message> {
         let builder = self.provider.builder(&self.messages);
-        let builder = if builder.messages.borrow().is_empty() {
-            // Create the inital prompt if not exists
-            builder.with(Message {
-                role: Role::User,
-                content: GENERAL.to_string(),
-            })
+        let mut builder = if builder.messages.borrow().is_empty() {
+            // Create the initial prompt if not exists
+            builder
+                .with(Message {
+                    role: Role::User,
+                    content: GENERAL.to_string(),
+                })
+                .with(Message {
+                    role: Role::User,
+                    content: message_type.to_string(),
+                })
         } else {
             // Use the existing messages
             builder
         }
-        .with(Message {
-            role: Role::User,
-            content: message_type.to_string(),
-        })
         .with(message);
 
         // Add the user message if it exists
-        let builder = match message_type.resolve_user_prompt() {
+        builder = match message_type.resolve_user_prompt() {
             Some(user_message) => builder.with(user_message),
             None => builder,
         };
 
-        let builder = match message_type {
-            MessageType::Code {
-                user_prompt: _,
-                files,
-            } => {
-                let mut builder = builder;
+        builder = match message_type {
+            MessageType::Code { user_prompt: _, files } => {
+                let mut current_builder = builder;
+
                 // Add the files to copilot prompt
                 if let Some(files) = files {
                     for file in files {
                         debug!(%file, "Processing file");
 
-                        let mut tracked = true;
-
-                        // Try to get the file from history
-                        let mut tracked_file = self
-                            .tracked_files
-                            .iter()
-                            .cloned()
-                            .filter(|p| p.path == file)
-                            .next()
-                            .unwrap_or_else(|| {
-                                debug!(%file, "File not tracked, creating a new tracked file instance");
-                                tracked = false;
-                                TrackedFile::from_file_arg(&file)
-                            });
-
-                        debug!(?tracked_file);
+                        // Check if file is already tracked (need to collect indices to avoid borrow conflicts)
+                        let tracked_file_index = self.tracked_files.iter().position(|p| p.path == file);
 
                         let reader = FileReader;
                         let range = Range::from_file_arg(&file);
 
-                        if tracked_file.content().is_empty() {
-                            debug!("Content empty, reading from file");
-                            reader.read(&mut tracked_file).await?;
-                        }
-
-                        let file_path = tracked_file.location();
-
-                        // If the file is not tracked, send it once.
-                        builder = if !tracked {
-                            info!(?file_path, "File not tracked, sending to copilot");
-                            self.tracked_files.push(TrackedFile::from_file_arg(&file));
-                            builder.with(Message {
-                                content: tracked_file.prepare_load_once().await?,
-                                role: Role::User,
-                            })
-                        } else {
+                        if let Some(index) = tracked_file_index {
+                            // File is tracked, check for differences
+                            let tracked_file = &mut self.tracked_files[index];
+                            let file_path = tracked_file.location();
                             info!(?file_path, "File tracked, checking for differences");
-                            // If it is tracked, check for differences and insert them.
-                            let diff_man = reader.get_diffs(&tracked_file)?;
+
+                            // Check for differences and update
+                            let diff_man = reader.get_diffs(tracked_file)?;
+                            reader.update_modified_time(tracked_file)?;
+
                             if let Some(diff_man) = diff_man {
                                 info!("Differences found, sending to copilot");
-                                debug!(?diff_man, "differences");
-                                builder.with_diffs(&diff_man, tracked_file.location())
+                                debug!("Differences: {:#?}", diff_man);
+                                current_builder = current_builder.with_diffs(&diff_man, tracked_file.location());
                             } else {
-                                debug!(?diff_man, "No differences found, skipping the update.");
-                                builder
+                                debug!("No differences found, skipping the update.");
                             }
-                        };
 
-                        reader.update_modified_time(&mut tracked_file)?;
+                            // Add file content to builder
+                            let file_content = tracked_file.prepare_for_copilot(range.as_ref()).await?;
+                            current_builder = current_builder.with(Message {
+                                content: file_content,
+                                role: Role::User,
+                            });
+                        } else {
+                            // File not tracked, create new tracked file
+                            let mut tracked_file = TrackedFile::from_file_arg(&file);
+                            reader.read(&mut tracked_file).await?;
 
-                        builder = builder.with(Message {
-                            content: tracked_file.prepare_for_copilot(range.as_ref()).await?,
-                            role: Role::User,
-                        })
+                            let file_path = tracked_file.location();
+                            info!(?file_path, "File not tracked, sending to copilot");
+
+                            // Add initial load message
+                            let load_content = tracked_file.prepare_load_once().await?;
+                            current_builder = current_builder.with(Message {
+                                content: load_content,
+                                role: Role::User,
+                            });
+
+                            // Add file content for copilot
+                            let copilot_content = tracked_file.prepare_for_copilot(range.as_ref()).await?;
+                            current_builder = current_builder.with(Message {
+                                content: copilot_content,
+                                role: Role::User,
+                            });
+
+                            // Add to tracked files
+                            self.tracked_files.push(tracked_file);
+                        }
                     }
                 }
-                builder
+                current_builder
             }
             _ => builder,
         };
@@ -220,9 +217,7 @@ impl<P: Provider + Default> Chat<P> {
         info!("Collecting message");
 
         // Collect the message
-        let message = streamer
-            .handle_stream(std::pin::pin!(stream), sender)
-            .await?;
+        let message = streamer.handle_stream(std::pin::pin!(stream), sender).await?;
 
         job.await?;
 
@@ -243,9 +238,7 @@ impl<P: Provider + Default> Chat<P> {
 
         let cwd = current_dir()?;
         let encoded = percent_encode(
-            cwd.to_str()
-                .ok_or(anyhow::anyhow!("error encoding path"))?
-                .as_bytes(),
+            cwd.to_str().ok_or(anyhow::anyhow!("error encoding path"))?.as_bytes(),
             NON_ALPHANUMERIC,
         );
 
@@ -268,9 +261,7 @@ impl<P: Provider + Default> Chat<P> {
 
         let cwd = current_dir()?;
         let encoded = percent_encode(
-            cwd.to_str()
-                .ok_or(anyhow::anyhow!("error encoding path"))?
-                .as_bytes(),
+            cwd.to_str().ok_or(anyhow::anyhow!("error encoding path"))?.as_bytes(),
             NON_ALPHANUMERIC,
         );
 
@@ -312,9 +303,7 @@ impl<'a, P: Provider> Provider for Builder<'a, P> {
         &self,
         model: &str,
         messages: &RefCell<Vec<Message>>,
-    ) -> impl Future<
-        Output = anyhow::Result<impl futures_util::Stream<Item = reqwest::Result<bytes::Bytes>>>,
-    > {
+    ) -> impl Future<Output = anyhow::Result<impl futures_util::Stream<Item = reqwest::Result<bytes::Bytes>>>> {
         self.client.request(model, messages)
     }
 
@@ -341,9 +330,7 @@ impl<'a, P: Provider> Builder<'a, P> {
     pub fn request(
         &self,
         model: &str,
-    ) -> impl Future<
-        Output = anyhow::Result<impl futures_util::Stream<Item = reqwest::Result<bytes::Bytes>>>,
-    > {
+    ) -> impl Future<Output = anyhow::Result<impl futures_util::Stream<Item = reqwest::Result<bytes::Bytes>>>> {
         self.client.request(model, self.messages)
     }
 
@@ -401,10 +388,7 @@ impl Display for MessageType {
 impl MessageType {
     fn resolve_user_prompt(&self) -> Option<Message> {
         let prompt = match self {
-            MessageType::Code {
-                user_prompt,
-                files: _,
-            } => user_prompt,
+            MessageType::Code { user_prompt, files: _ } => user_prompt,
             MessageType::Commit(user_prompt) => user_prompt,
             MessageType::Git(user_prompt) => user_prompt,
         };
@@ -561,18 +545,8 @@ mod tests {
         );
 
         assert_eq!(
-            chat1
-                .messages
-                .borrow()
-                .first()
-                .expect("first message in chat 1")
-                .role,
-            chat2
-                .messages
-                .borrow()
-                .first()
-                .expect("first message in chat 2")
-                .role
+            chat1.messages.borrow().first().expect("first message in chat 1").role,
+            chat2.messages.borrow().first().expect("first message in chat 2").role
         )
     }
 }

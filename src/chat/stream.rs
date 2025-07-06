@@ -117,7 +117,9 @@ impl Streamer for ChatStreamer {
     ) -> anyhow::Result<()> {
         loop {
             match receiver.recv().await {
-                Some(content) => writer.write(content.as_bytes()).await?,
+                Some(content) => {
+                    writer.write(content.as_bytes()).await?;
+                }
                 None => {
                     debug!("End of streaming");
                     break;

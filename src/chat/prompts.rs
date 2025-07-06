@@ -64,4 +64,3 @@ You are a Git power user. Given a Git task, provide the most efficient and corre
 command(s) or configuration. Prefer short, safe, and reproducible commands.
 Explain only if the operation is not self-explanatory.
 "#;
-

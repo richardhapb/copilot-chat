@@ -4,7 +4,6 @@ use clap::{Parser, Subcommand};
 #[derive(Parser, Debug)]
 #[command(name="copilot-chat", version, about, long_about = None, author="richardhapb")]
 pub struct Cli {
-
     #[command(subcommand)]
     pub command: Option<Commands>,
 
@@ -22,7 +21,7 @@ pub struct Cli {
 
     /// Prompt to send to Copilot
     #[arg(short, long, global = true)]
-    pub model: Option<String>
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Subcommand, PartialEq)]
@@ -32,7 +31,7 @@ pub enum Commands {
     /// List all the available models
     Models,
     /// Clear the chat history for the current directory
-    Clear
+    Clear,
 }
 
 #[cfg(test)]
@@ -47,7 +46,10 @@ mod tests {
         assert!(cli.command.is_none());
         assert!(cli.prompt.is_some());
 
-        assert_eq!(cli.prompt.expect("prompt args"), vec!["hello", "there,", "tell", "me", "something"]);
+        assert_eq!(
+            cli.prompt.expect("prompt args"),
+            vec!["hello", "there,", "tell", "me", "something"]
+        );
     }
 
     #[test]
@@ -61,4 +63,3 @@ mod tests {
         assert_eq!(cli.prompt.expect("prompt args"), vec!["write", "a", "cool", "message"]);
     }
 }
-
