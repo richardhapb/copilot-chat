@@ -23,6 +23,7 @@ use tokio::{io::AsyncWrite, sync::mpsc::channel};
 use tracing::{debug, error, info, trace};
 
 use super::{
+    errors::ChatError,
     prompts::{CODE, COMMIT, GIT},
     stream::Streamer,
 };
@@ -40,10 +41,7 @@ impl<P: Provider + Default> Chat<P> {
     /// Create new chat
     pub fn new(provider: P) -> Self {
         Self {
-            // All the messages of the chat
-            messages: vec![].into(),
-
-            // Provider wich connect with the API
+            messages: RefCell::new(vec![]),
             provider,
             tracked_files: vec![],
         }
@@ -58,32 +56,21 @@ impl<P: Provider + Default> Chat<P> {
         self.messages.borrow_mut().push(message);
     }
 
-    #[allow(dead_code)]
-    pub fn tracked_paths(&self) -> Vec<&str> {
-        self.tracked_files
-            .iter()
-            .map(|t| t.path.as_str())
-            .collect::<Vec<&str>>()
-    }
-
-    /// Try to load a chat for the currenct directory
-    pub fn try_load_chat(path: Option<&str>) -> anyhow::Result<Option<Self>> {
-        let cache = if let Some(path) = path {
-            PathBuf::from_str(path)?
-        } else {
-            let home = dirs::home_dir().ok_or(anyhow::anyhow!("read user's home"))?;
-            home.join(".cache").join("copilot-chat")
-        };
-
+    /// Try to load a chat for the current directory
+    pub fn try_load_chat(path: Option<&str>) -> Result<Option<Self>, ChatError> {
+        let cache = Self::get_cache_path(path)?;
         let cwd = current_dir()?;
         let encoded = percent_encode(
-            cwd.to_str().ok_or(anyhow::anyhow!("error encoding path"))?.as_bytes(),
+            cwd.to_str()
+                .ok_or_else(|| {
+                    ChatError::CacheError(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid path"))
+                })?
+                .as_bytes(),
             NON_ALPHANUMERIC,
         );
 
-        let cache_file = cache.join(format!("{encoded}.json"));
-        let exists = std::fs::exists(&cache_file)?;
-        if !exists {
+        let cache_file = cache.join(format!("{}.json", encoded));
+        if !cache_file.exists() {
             return Ok(None);
         }
 
@@ -100,117 +87,15 @@ impl<P: Provider + Default> Chat<P> {
         message_type: MessageType,
         streamer: impl Streamer + 'static,
         mut writer: impl AsyncWrite + Send + Unpin + 'static,
-    ) -> anyhow::Result<Message> {
-        let builder = self.provider.builder(&self.messages);
-        let mut builder = if builder.messages.borrow().is_empty() {
-            // Create the initial prompt if not exists
-            builder
-                .with(Message {
-                    role: Role::User,
-                    content: GENERAL.to_string(),
-                })
-                .with(Message {
-                    role: Role::User,
-                    content: message_type.to_string(),
-                })
-        } else {
-            // Use the existing messages
-            builder
-        }
-        .with(message);
-
-        // Add the user message if it exists
-        builder = match message_type.resolve_user_prompt() {
-            Some(user_message) => builder.with(user_message),
-            None => builder,
-        };
-
-        builder = match message_type {
-            MessageType::Code { user_prompt: _, files } => {
-                let mut current_builder = builder;
-
-                // Add the files to copilot prompt
-                if let Some(files) = files {
-                    for file in files {
-                        debug!(%file, "Processing file");
-
-                        // Check if file is already tracked (need to collect indices to avoid borrow conflicts)
-                        let tracked_file_index = self.tracked_files.iter().position(|p| p.path == file);
-
-                        let reader = FileReader;
-                        let range = Range::from_file_arg(&file);
-
-                        if let Some(index) = tracked_file_index {
-                            // File is tracked, check for differences
-                            let tracked_file = &mut self.tracked_files[index];
-
-                            // If it is empty, read the content. Then, when trying to diff, it will
-                            // skip it because the modified time is the same.
-                            if tracked_file.content().is_empty() {
-                                info!(%file, "Tracked file content empty, reading");
-                                reader.read(tracked_file).await?;
-                            }
-
-                            let file_path = tracked_file.location();
-                            info!(?file_path, "File tracked, checking for differences");
-
-                            // Check for differences and update
-                            let diff_man = reader.get_diffs(tracked_file)?;
-
-                            // TODO: What happens if the file doesn't exist? The file should be removed
-                            // from tracked_file and Copilot should be noted
-
-                            // Update the cached file content
-                            reader.read(tracked_file).await?;
-
-                            if let Some(diff_man) = diff_man {
-                                info!("Differences found, sending to copilot");
-                                debug!("Differences: {:#?}", diff_man);
-                                current_builder = current_builder.with_diffs(&diff_man, tracked_file.location());
-                            } else {
-                                debug!("No differences found, skipping the update.");
-                            }
-
-                            // Add file content to builder
-                            let file_content = tracked_file.prepare_for_copilot(range.as_ref()).await?;
-                            current_builder = current_builder.with(Message {
-                                content: file_content,
-                                role: Role::User,
-                            });
-                        } else {
-                            // File not tracked, create new tracked file
-                            let mut tracked_file = TrackedFile::from_file_arg(&file);
-                            reader.read(&mut tracked_file).await?;
-
-                            let file_path = tracked_file.location();
-                            info!(?file_path, "File not tracked, sending to copilot");
-
-                            // Add initial load message
-                            let load_content = tracked_file.prepare_load_once().await?;
-                            current_builder = current_builder.with(Message {
-                                content: load_content,
-                                role: Role::User,
-                            });
-
-                            // Add file content for copilot
-                            let copilot_content = tracked_file.prepare_for_copilot(range.as_ref()).await?;
-                            current_builder = current_builder.with(Message {
-                                content: copilot_content,
-                                role: Role::User,
-                            });
-
-                            // Add to tracked files
-                            self.tracked_files.push(tracked_file);
-                        }
-                    }
-                }
-                current_builder
-            }
-            _ => builder,
-        };
+    ) -> Result<Message, ChatError> {
+        let mut builder = prepare_builder(&self.provider, &self.messages, message, &message_type)?;
+        Self::handle_files(&mut self.tracked_files, &message_type, &mut builder).await?;
 
         trace!("sending request to copilot");
-        let stream = builder.request(model.unwrap_or("gpt-4o")).await?;
+        let stream = builder
+            .request(model.unwrap_or("gpt-4o"))
+            .await
+            .map_err(|e| ChatError::ProviderError(e.to_string()))?;
 
         debug!("Creating channels");
         let (sender, receiver) = channel(32);
@@ -230,7 +115,10 @@ impl<P: Provider + Default> Chat<P> {
         info!("Collecting message");
 
         // Collect the message
-        let message = streamer.handle_stream(std::pin::pin!(stream), sender).await?;
+        let message = streamer
+            .handle_stream(std::pin::pin!(stream), sender)
+            .await
+            .map_err(|e| ChatError::StreamError(e.to_string()))?;
 
         job.await?;
 
@@ -239,23 +127,22 @@ impl<P: Provider + Default> Chat<P> {
     }
 
     /// Save the chat for the current directory
-    pub fn save_chat(&self, path: Option<&str>) -> anyhow::Result<()> {
-        let cache = if let Some(path) = path {
-            PathBuf::from_str(path)?
-        } else {
-            let home = dirs::home_dir().ok_or(anyhow::anyhow!("read user's home"))?;
-            home.join(".cache").join("copilot-chat")
-        };
+    pub fn save_chat(&self, path: Option<&str>) -> Result<(), ChatError> {
+        let cache = Self::get_cache_path(path)?;
         create_dir_all(&cache)?;
         info!(?cache, "Saving chat");
 
         let cwd = current_dir()?;
         let encoded = percent_encode(
-            cwd.to_str().ok_or(anyhow::anyhow!("error encoding path"))?.as_bytes(),
+            cwd.to_str()
+                .ok_or_else(|| {
+                    ChatError::CacheError(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid path"))
+                })?
+                .as_bytes(),
             NON_ALPHANUMERIC,
         );
 
-        let cache_file = cache.join(format!("{encoded}.json"));
+        let cache_file = cache.join(format!("{}.json", encoded));
         let mut file = File::create(&cache_file)?;
         file.write_all(serde_json::to_string(self)?.as_bytes())?;
         info!(?cache_file, "Chat saved successfully");
@@ -263,23 +150,22 @@ impl<P: Provider + Default> Chat<P> {
     }
 
     /// Delete the saved chat for the current directory
-    pub fn remove_chat(&self, path: Option<&str>) -> anyhow::Result<()> {
-        let cache = if let Some(path) = path {
-            PathBuf::from_str(path)?
-        } else {
-            let home = dirs::home_dir().ok_or(anyhow::anyhow!("read user's home"))?;
-            home.join(".cache").join("copilot-chat")
-        };
+    pub fn remove_chat(&self, path: Option<&str>) -> Result<(), ChatError> {
+        let cache = Self::get_cache_path(path)?;
         info!(?cache, "Deleting chat");
 
         let cwd = current_dir()?;
         let encoded = percent_encode(
-            cwd.to_str().ok_or(anyhow::anyhow!("error encoding path"))?.as_bytes(),
+            cwd.to_str()
+                .ok_or_else(|| {
+                    ChatError::CacheError(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid path"))
+                })?
+                .as_bytes(),
             NON_ALPHANUMERIC,
         );
 
-        let cache_file = cache.join(format!("{encoded}.json"));
-        if std::fs::exists(&cache_file)? {
+        let cache_file = cache.join(format!("{}.json", encoded));
+        if cache_file.exists() {
             std::fs::remove_file(&cache_file)?;
             info!(?cache_file, "Chat deleted successfully");
         } else {
@@ -287,6 +173,151 @@ impl<P: Provider + Default> Chat<P> {
         }
         Ok(())
     }
+
+    fn get_cache_path(path: Option<&str>) -> Result<PathBuf, ChatError> {
+        if let Some(path) = path {
+            PathBuf::from_str(path)
+                .map_err(|e| ChatError::CacheError(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))
+        } else {
+            dirs::home_dir()
+                .map(|home| home.join(".cache").join("copilot-chat"))
+                .ok_or_else(|| {
+                    ChatError::CacheError(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "Home directory not found",
+                    ))
+                })
+        }
+    }
+
+    async fn handle_files<'a>(
+        tracked_files: &mut Vec<TrackedFile>,
+        message_type: &MessageType,
+        builder: &mut Builder<'a, P>,
+    ) -> Result<(), ChatError> {
+        if let MessageType::Code { files, .. } = message_type {
+            if let Some(files) = files {
+                for file in files {
+                    debug!(%file, "Processing file");
+                    Self::process_file(tracked_files, file, builder).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn process_file<'a>(
+        tracked_files: &mut Vec<TrackedFile>,
+        file: &str,
+        builder: &mut Builder<'a, P>,
+    ) -> Result<(), ChatError> {
+        let reader = FileReader;
+        let range = Range::from_file_arg(file);
+        let file_path = if let Some((path, _)) = file.split_once(':') {
+            path
+        } else {
+            file
+        };
+
+        if let Some(index) = tracked_files.iter().position(|p| p.path == file_path) {
+            let mut tracked_file = tracked_files.remove(index);
+
+            if tracked_file.content().is_empty() {
+                info!(%file, "Tracked file content empty, reading");
+                reader
+                    .read(&mut tracked_file)
+                    .await
+                    .map_err(|e| ChatError::ToolError(e.to_string()))?;
+            }
+
+            let file_path = tracked_file.location();
+            info!(?file_path, "File tracked, checking for differences");
+
+            let diff_man = reader
+                .get_diffs(&tracked_file)
+                .map_err(|e| ChatError::ToolError(e.to_string()))?;
+            reader
+                .read(&mut tracked_file)
+                .await
+                .map_err(|e| ChatError::ToolError(e.to_string()))?;
+
+            if let Some(diff_man) = diff_man {
+                info!("Differences found, sending to copilot");
+                debug!("Differences: {:?}", diff_man);
+                builder.with_diffs(&diff_man, tracked_file.location());
+            } else {
+                debug!("No differences found, skipping the update.");
+            }
+
+            let file_content = tracked_file
+                .prepare_for_copilot(range.as_ref())
+                .await
+                .map_err(|e| ChatError::ToolError(e.to_string()))?;
+            builder.with(Message {
+                content: file_content,
+                role: Role::User,
+            });
+
+            tracked_files.insert(index, tracked_file);
+        } else {
+            let mut tracked_file = TrackedFile::from_file_arg(file);
+            reader
+                .read(&mut tracked_file)
+                .await
+                .map_err(|e| ChatError::ToolError(e.to_string()))?;
+
+            let file_path = tracked_file.location();
+            info!(?file_path, "File not tracked, sending to copilot");
+
+            let load_content = tracked_file
+                .prepare_load_once()
+                .await
+                .map_err(|e| ChatError::ToolError(e.to_string()))?;
+            builder.with(Message {
+                content: load_content,
+                role: Role::User,
+            });
+
+            let copilot_content = tracked_file
+                .prepare_for_copilot(range.as_ref())
+                .await
+                .map_err(|e| ChatError::ToolError(e.to_string()))?;
+            builder.with(Message {
+                content: copilot_content,
+                role: Role::User,
+            });
+
+            tracked_files.push(tracked_file);
+        }
+        Ok(())
+    }
+}
+
+fn prepare_builder<'a, P: Provider>(
+    provider: &'a P,
+    messages: &'a RefCell<Vec<Message>>,
+    message: Message,
+    message_type: &MessageType,
+) -> Result<Builder<'a, P>, ChatError> {
+    let mut builder = provider.builder(messages);
+    if builder.messages.borrow().is_empty() {
+        builder
+            .with(Message {
+                role: Role::User,
+                content: GENERAL.to_string(),
+            })
+            .with(Message {
+                role: Role::User,
+                content: message_type.to_string(),
+            });
+    }
+    builder.with(message);
+
+    if let Some(user_message) = message_type.resolve_user_prompt() {
+        builder.with(user_message);
+    }
+
+    Ok(builder)
 }
 
 /// A chat message
@@ -311,20 +342,6 @@ pub struct Builder<'a, P: Provider> {
     messages: &'a RefCell<Vec<Message>>,
 }
 
-impl<'a, P: Provider> Provider for Builder<'a, P> {
-    fn request(
-        &self,
-        model: &str,
-        messages: &RefCell<Vec<Message>>,
-    ) -> impl Future<Output = anyhow::Result<impl futures_util::Stream<Item = reqwest::Result<bytes::Bytes>>>> {
-        self.client.request(model, messages)
-    }
-
-    async fn get_models(&self) -> anyhow::Result<Vec<String>> {
-        Ok(vec![])
-    }
-}
-
 impl<'a, P: Provider> Builder<'a, P> {
     pub fn new(provider: &'a P, messages: &'a RefCell<Vec<Message>>) -> Self {
         Self {
@@ -334,26 +351,30 @@ impl<'a, P: Provider> Builder<'a, P> {
     }
 
     /// Append a message to the builder
-    pub fn with(self, message: Message) -> Self {
+    pub fn with(&mut self, message: Message) -> &mut Self {
         self.messages.borrow_mut().push(message);
-
         self
     }
 
-    pub fn request(
+    pub async fn request(
         &self,
         model: &str,
-    ) -> impl Future<Output = anyhow::Result<impl futures_util::Stream<Item = reqwest::Result<bytes::Bytes>>>> {
-        self.client.request(model, self.messages)
+    ) -> anyhow::Result<impl futures_util::Stream<Item = reqwest::Result<bytes::Bytes>>> {
+        self.client.request(model, self.messages).await
     }
 
-    pub fn with_diffs(self, diff_man: &DiffsManager, filename: &str) -> Self {
+    pub fn with_diffs(&mut self, diff_man: &DiffsManager, filename: &str) -> &mut Self {
         if diff_man.diffs.is_empty() {
             debug!("There is not differences, skipping attach them");
             return self;
         }
 
-        let mut content = format!("Here the updates of the file {filename}:\n\n");
+        let mut content = format!(
+            "Here the updates of the file {}:
+
+",
+            filename
+        );
 
         for diff in diff_man.diffs.iter() {
             content.push_str(&diff.to_string());
@@ -386,22 +407,18 @@ pub enum MessageType {
 impl Display for MessageType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let prompt = match self {
-            MessageType::Code {
-                user_prompt: _,
-                files: _,
-            } => CODE,
+            MessageType::Code { .. } => CODE,
             MessageType::Commit(_) => COMMIT,
             MessageType::Git(_) => GIT,
         };
-
-        write!(f, "{prompt}")
+        write!(f, "{}", prompt)
     }
 }
 
 impl MessageType {
     fn resolve_user_prompt(&self) -> Option<Message> {
         let prompt = match self {
-            MessageType::Code { user_prompt, files: _ } => user_prompt,
+            MessageType::Code { user_prompt, .. } => user_prompt,
             MessageType::Commit(user_prompt) => user_prompt,
             MessageType::Git(user_prompt) => user_prompt,
         };
@@ -447,13 +464,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_message_with_stream() {
-        let chunk = "
-        {\"choices\":[{\"index\":0,\"content_filter_offsets\":{\"check_offset\":175,\"start_offset\":176,\"end_offset\":280},
-        \"content_filter_results\":{\"hate\":{\"filtered\":false,\"severity\":\"safe\"},\"self_harm\":{\"filtered\":false,
-        \"severity\":\"safe\"},\"sexual\":{\"filtered\":false,\"severity\":\"safe\"},\"violence\":{\"filtered\":false,\"severity\":\"safe\"}},
-        \"delta\":{\"content\":\"Rust \"}}],\"created\":1751000792,\"id\":\"chatcmpl-BmvaCUrU0DjRli6juhycOsjF1OAZr\",
-        \"model\":\"gpt-4o-2024-11-20\",\"system_fingerprint\":\"fp_b705f0c291\"}
-        ";
+        let chunk = r#"
+        {"choices":[{"index":0,"delta":{"content":"Rust "}}]}
+        "#;
 
         let provider = TestProvider::new(10, chunk);
         let mut chat = Chat::new(provider);

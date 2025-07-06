@@ -65,7 +65,7 @@ impl ReaderTool for FileReader {
         readable.set_content(content);
 
         // Same case here, avoid to fail
-        self.update_modified_time(readable).unwrap_or_else(|_|{
+        self.update_modified_time(readable).unwrap_or_else(|_| {
             debug!("File not found, updating the modified time to now");
             // Update this because the file is "up to date" with empty content
             readable.set_modified_time(SystemTime::now());

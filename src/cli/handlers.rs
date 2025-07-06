@@ -1,5 +1,5 @@
 use crate::{
-    chat::{Chat, ChatStreamer, Message, MessageType, Role},
+    chat::{Chat, ChatStreamer, Message, MessageType, Role, errors::ChatError},
     cli::commands::{Cli, Commands},
     client::{CopilotClient, provider::Provider},
     tools::cli::CliExecutor,
@@ -37,11 +37,8 @@ impl<'a> CommandHandler<'a> {
     ) -> anyhow::Result<ExecutionAttributes> {
         let mut execution_type = ExecutionType::Exit;
 
-        // Get the message and chat; if the command is `commit`, a new chat is always used.
         let (message_type, chat) = match self.cli_command.command {
             Some(Commands::Commit) => {
-                // If there is not a stdin, try to get the git diff
-                // in the current directory
                 if stdin_str.is_empty() {
                     *stdin_str = CliExecutor::new().execute("git", &["diff", "--staged"]).await?;
 
@@ -73,7 +70,6 @@ impl<'a> CommandHandler<'a> {
                     (None, None)
                 }
             },
-            // Default
             None => {
                 execution_type = ExecutionType::Interactive;
                 (
@@ -90,6 +86,7 @@ impl<'a> CommandHandler<'a> {
         };
 
         let chat = chat.unwrap_or(Chat::new(CopilotClient::default()));
+        debug!(?message_type, "Received");
         let message_type = message_type.unwrap_or(MessageType::Commit(None));
 
         Ok(ExecutionAttributes {
@@ -114,18 +111,9 @@ impl ExecutionAttributes {
         streamer: &ChatStreamer,
         writer: tokio::io::Stdout,
         stdin_str: String,
-    ) -> anyhow::Result<()> {
-        // First request
+    ) -> Result<(), ChatError> {
         debug!("Processing first message");
         self.process_request(cli, streamer.clone(), writer, stdin_str).await?;
-
-        let tracked_paths = self.chat.tracked_paths();
-        // Attach the files without range
-        let message_type = MessageType::Code {
-            user_prompt: None,
-            files: Some(tracked_paths.into_iter().map(|p| p.to_string()).collect()),
-        };
-        self.message_type = message_type;
 
         let mut stdout = std::io::stdout();
 
@@ -134,22 +122,16 @@ impl ExecutionAttributes {
 
             debug!("Capturing new message");
             if atty::is(atty::Stream::Stdin) {
-                // For interactive mode, use blocking stdin.
                 let stdin = std::io::stdin();
-                println!();
-                println!();
-                print!("> ");
-                stdout.flush()?;
+                println!("\n\n> ");
+                stdout.flush().map_err(|e| ChatError::CacheError(e))?;
 
                 debug!("Reading from interactive mode");
-                stdin.read_line(&mut read_str)?;
+                stdin.read_line(&mut read_str).map_err(|e| ChatError::CacheError(e))?;
             } else {
-                // For non-interactive use, prefer using a socket because stdin may have been closed
-                // by the client, which can make re-attaching tricky.
-                let req = read_from_socket().await?;
-
-                // Separate the prompt to to prompt acoording to protocol
-                // <file>:<range>@prompt
+                let req = read_from_socket()
+                    .await
+                    .map_err(|e| ChatError::RequestError(e.to_string()))?;
                 read_str = req.prompt;
                 self.message_type = MessageType::Code {
                     user_prompt: None,
@@ -158,7 +140,7 @@ impl ExecutionAttributes {
             }
 
             debug!(%read_str, "New user message");
-            if read_str == "exit" {
+            if read_str.trim() == "exit" {
                 break;
             }
 
@@ -176,7 +158,7 @@ impl ExecutionAttributes {
         streamer: ChatStreamer,
         writer: tokio::io::Stdout,
         stdin_str: String,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), ChatError> {
         let message = Message {
             role: Role::User,
             content: stdin_str,
@@ -184,26 +166,23 @@ impl ExecutionAttributes {
 
         debug!(?self.message_type, "User message");
 
-        // Send with stream by default, maybe in the future a buffered
-        // response can be returned if it is configured
         let response_message = self
             .chat
             .send_message_with_stream(
                 cli.model.as_deref(),
-                message,
+                message.clone(),
                 self.message_type.clone(),
                 streamer.clone(),
                 writer,
             )
             .await?;
+        self.chat.add_message(message);
         self.chat.add_message(response_message);
 
         Ok(())
     }
 }
 
-/// Separate the prompt to to prompt acoording to protocol
-/// <file>:<range>@prompt
 struct RequestProtocol {
     prompt: String,
     files: Option<Vec<String>>,
@@ -211,20 +190,15 @@ struct RequestProtocol {
 
 impl RequestProtocol {
     fn from_input(raw_input: &str) -> Self {
-        let splitted = raw_input.split_once("@");
-        let (file_str, prompt) = if let Some(splited) = splitted {
-            splited
-        } else {
-            ("", raw_input)
+        let (file_str, prompt) = match raw_input.split_once('@') {
+            Some(split) => split,
+            None => ("", raw_input),
         };
-
-        // TODO: Handle multiples files
         let files = if file_str.is_empty() {
             None
         } else {
             Some(vec![file_str.to_string()])
         };
-
         Self {
             prompt: prompt.to_string(),
             files,
@@ -233,22 +207,32 @@ impl RequestProtocol {
 }
 
 async fn read_from_socket() -> anyhow::Result<RequestProtocol> {
-    let mut input = String::new();
-
-    // TODO: Make this dynamic
     let tcp = TcpListener::bind("127.0.0.1:4000").await?;
     info!("Listening on 127.0.0.1:4000");
-
     let (mut connection, addr) = tcp.accept().await?;
-
     info!(%addr, "Connection received");
+    let mut input = String::new();
+    let mut buffer = [0u8; 1024];
 
-    while input.is_empty() {
-        connection.read_to_string(&mut input).await?;
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(5);
+
+    while input.is_empty() && start.elapsed() < timeout {
+        match connection.read(&mut buffer).await {
+            Ok(0) => break,
+            Ok(n) => input.push_str(std::str::from_utf8(&buffer[..n])?),
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                continue;
+            }
+            Err(e) => return Err(e.into()),
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
-
+    if input.is_empty() {
+        return Err(anyhow::anyhow!("No data received within timeout"));
+    }
     debug!(%input, "Received");
-
     Ok(RequestProtocol::from_input(&input))
 }

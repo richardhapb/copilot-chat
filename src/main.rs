@@ -32,10 +32,12 @@ async fn main() -> anyhow::Result<()> {
         stdin.lock().read_line(&mut stdin_str)?;
     }
 
-    debug!{%stdin_str, "Received"};
+    debug! {%stdin_str, "Received"};
 
     // Parse the user prompt from CLI if exist - clone to avoid partial move
     let user_prompt = cli.prompt.as_ref().map(|prompt| prompt.join(" "));
+
+    debug!(?user_prompt);
 
     let mut handler = CommandHandler::new(&cli, user_prompt.as_deref());
     let mut attr = handler.prepare(client, &mut stdin_str).await?;
@@ -48,11 +50,17 @@ async fn main() -> anyhow::Result<()> {
 
     match attr.execution_type {
         ExecutionType::Once => {
-            attr.process_request(&cli, streamer.clone(), writer, stdin_str).await?;
+            if let Err(e) = attr.process_request(&cli, streamer.clone(), writer, stdin_str).await {
+                eprintln!("Error: {}", e);
+            }
         }
         ExecutionType::Interactive | ExecutionType::Pipe => {
-            attr.process_loop(&cli, &streamer, writer, stdin_str).await?;
-            attr.chat.save_chat(None)?;
+            if let Err(e) = attr.process_loop(&cli, &streamer, writer, stdin_str).await {
+                eprintln!("Error: {}", e);
+            }
+            if let Err(e) = attr.chat.save_chat(None) {
+                eprintln!("Error saving chat: {}", e);
+            }
         }
         ExecutionType::Exit => {
             std::process::exit(0);
