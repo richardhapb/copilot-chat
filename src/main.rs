@@ -6,6 +6,8 @@ use tools::cli::CliExecutor;
 use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
+use crate::client::provider::Provider;
+
 mod chat;
 mod cli;
 mod client;
@@ -62,7 +64,11 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
             (MessageType::Commit(user_prompt), Chat::new(client))
-        }
+        },
+        Some(Commands::Models) => {
+            client.get_models().await?;
+            std::process::exit(0);
+        },
         // Default
         None => (
             MessageType::Code {
@@ -85,7 +91,7 @@ async fn main() -> anyhow::Result<()> {
     // Send with stream by default, maybe in the future a buffered
     // response can be returned if it is configured
     let response_message = chat
-        .send_message_with_stream(message, message_type, streamer, writer)
+        .send_message_with_stream(cli.model.as_deref(), message, message_type, streamer, writer)
         .await?;
 
     chat.add_message(response_message);

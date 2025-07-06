@@ -18,13 +18,19 @@ pub struct Cli {
 
     /// Prompt to send to Copilot
     #[arg(trailing_var_arg = true, global = true)]
-    pub prompt: Option<Vec<String>>
+    pub prompt: Option<Vec<String>>,
+
+    /// Prompt to send to Copilot
+    #[arg(short, long, global = true)]
+    pub model: Option<String>
 }
 
 #[derive(Debug, Subcommand, PartialEq)]
 pub enum Commands {
     /// Write the commit message for the current directory
     Commit,
+    /// List all the available models
+    Models
 }
 
 #[cfg(test)]

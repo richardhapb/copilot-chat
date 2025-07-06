@@ -16,6 +16,8 @@ static HEADERS_URL: &str = "https://api.github.com/copilot_internal/v2/token";
 static COMPLETION_URL: &str = "https://api.githubcopilot.com/chat/completions";
 /// This is used because Copilot requires a specified agent; otherwise, it returns a 403 status code.
 static USER_AGENT: &str = "curl/8.7.1";
+/// Endpoint for retrieving the availables models
+static MODELS: &str = "https://api.githubcopilot.com/models";
 
 /// Main Copilot client
 #[derive(Default)]
@@ -30,10 +32,64 @@ struct HeadersResponse {
     token: String,
 }
 
+#[derive(Deserialize, Debug)]
+#[allow(dead_code)]
+struct ModelVision {
+    max_prompt_image_size: Option<i32>,
+    max_prompt_images: Option<i32>,
+    supported_media_types: Option<Vec<String>>,
+}
+
+#[derive(Deserialize, Debug)]
+#[allow(dead_code)]
+struct ModelLimits {
+    max_context_window_tokens: Option<i32>,
+    max_output_tokens: Option<i32>,
+    max_prompt_tokens: Option<i32>,
+    vision: Option<ModelVision>,
+}
+
+#[derive(Deserialize, Debug)]
+#[allow(dead_code)]
+struct ModelSupport {
+    parallel_tool_calls: Option<bool>,
+    streaming: Option<bool>,
+    structured_outputs: Option<bool>,
+    tool_calls: Option<bool>,
+}
+
+#[derive(Deserialize, Debug)]
+#[allow(dead_code)]
+struct ModelCapabilites {
+    family: String,
+    limits: Option<ModelLimits>,
+    supports: Option<ModelSupport>,
+    tokenizer: Option<String>,
+    r#type: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+#[allow(dead_code)]
+struct ModelsResponse {
+    capabilities: ModelCapabilites,
+    id: String,
+    model_picker_enabled: Option<bool>,
+    name: String,
+    preview: bool,
+    vendor: String,
+    version: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct ModelsRawResponse {
+    data: Vec<ModelsResponse>
+}
+
 impl Provider for CopilotClient {
     /// Make a request to copilot, passing the message provided by the user
     async fn request(
         &self,
+        model: &str,
         messages: &RefCell<Vec<Message>>,
     ) -> anyhow::Result<impl Stream<Item = reqwest::Result<bytes::Bytes>>> {
         let headers = self.get_headers().await?;
@@ -43,7 +99,7 @@ impl Provider for CopilotClient {
         let body = CopilotBody {
             temperature: 0.1,
             max_tokens: 4096,
-            model: "gpt-4o".to_string(),
+            model: model.to_string(),
             messages,
             stream: true,
         };
@@ -65,6 +121,31 @@ impl Provider for CopilotClient {
         // Stream for processing the response
         let stream = resp.bytes_stream();
         Ok(stream)
+    }
+
+    async fn get_models(&self) -> anyhow::Result<Vec<String>> {
+        let headers = self.get_headers().await?;
+
+        info!("Making request for retrieving models");
+        trace!(?headers);
+
+        let req = self
+            .client
+            .get(MODELS)
+            .header("Authorization", format!("Bearer {}", headers.auth_token))
+            .header("Copilot-Integration-Id", headers.copilot_integration_id)
+            .header("Editor-Version", headers.editor_version)
+            .header("Editor-Plugin-Version", headers.editor_plugin_version)
+            .header("User-Agent", USER_AGENT);
+        let resp = req.send().await?;
+        let resp_body = resp.json::<ModelsRawResponse>().await?;
+        debug!("{:#?}", resp_body.data);
+
+        for model in resp_body.data.iter() {
+            println!("{}", model.id);
+        }
+
+        Ok(vec![])
     }
 }
 

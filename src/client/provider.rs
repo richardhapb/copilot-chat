@@ -7,15 +7,18 @@ use futures_util::Stream;
 pub trait Provider {
     async fn request(
         &self,
+        model: &str,
         messages: &RefCell<Vec<Message>>,
     ) -> anyhow::Result<impl Stream<Item = reqwest::Result<bytes::Bytes>>>;
 
-    fn builder<'a>(&'a self, messages: &'a  RefCell<Vec<Message>>) -> Builder<'a, Self>
+    fn builder<'a>(&'a self, messages: &'a RefCell<Vec<Message>>) -> Builder<'a, Self>
     where
         Self: Sized,
     {
         Builder::new(self, messages)
     }
+
+    async fn get_models(&self) -> anyhow::Result<Vec<String>>;
 }
 
 #[cfg(test)]
@@ -82,11 +85,16 @@ pub(crate) mod tests {
     impl<'a> Provider for TestProvider<'a> {
         async fn request(
             &self,
-        messages: &RefCell<Vec<Message>>,
+            _model: &str,
+            messages: &RefCell<Vec<Message>>,
         ) -> anyhow::Result<impl Stream<Item = reqwest::Result<bytes::Bytes>>> {
             let stream = TestStreamProvider::new(self.chunks, self.content);
             self.input_messages.replace(messages.borrow().to_owned());
             Ok(stream)
+        }
+
+        async fn get_models(&self) -> anyhow::Result<Vec<String>> {
+            Ok(vec![])
         }
     }
 }

@@ -96,6 +96,7 @@ impl<P: Provider + Default> Chat<P> {
     /// also returns the `System` message when it is ready.
     pub async fn send_message_with_stream(
         &mut self,
+        model: Option<&str>,
         message: Message,
         message_type: MessageType,
         streamer: impl Streamer + 'static,
@@ -167,7 +168,7 @@ impl<P: Provider + Default> Chat<P> {
             _ => builder,
         };
 
-        let stream = builder.request().await?;
+        let stream = builder.request(model.unwrap_or("gpt-4o")).await?;
 
         debug!("Creating channels");
         let (sender, receiver) = channel(32);
@@ -247,11 +248,16 @@ pub struct Builder<'a, P: Provider> {
 impl<'a, P: Provider> Provider for Builder<'a, P> {
     fn request(
         &self,
+        model: &str,
         messages: &RefCell<Vec<Message>>,
     ) -> impl Future<
         Output = anyhow::Result<impl futures_util::Stream<Item = reqwest::Result<bytes::Bytes>>>,
     > {
-        self.client.request(messages)
+        self.client.request(model, messages)
+    }
+
+    async fn get_models(&self) -> anyhow::Result<Vec<String>> {
+        Ok(vec![])
     }
 }
 
@@ -272,10 +278,11 @@ impl<'a, P: Provider> Builder<'a, P> {
 
     pub fn request(
         &self,
+        model: &str,
     ) -> impl Future<
         Output = anyhow::Result<impl futures_util::Stream<Item = reqwest::Result<bytes::Bytes>>>,
     > {
-        self.client.request(self.messages)
+        self.client.request(model, self.messages)
     }
 
     pub fn with_diffs(self, diff_man: &DiffsManager, filename: &str) -> Self {
@@ -398,6 +405,7 @@ mod tests {
 
         let response = chat
             .send_message_with_stream(
+                None,
                 message,
                 MessageType::Code {
                     user_prompt: None,
@@ -425,6 +433,7 @@ mod tests {
         };
 
         chat.send_message_with_stream(
+            None,
             message,
             MessageType::Code {
                 user_prompt: Some("I am an user".to_string()),
