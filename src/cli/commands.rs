@@ -30,7 +30,9 @@ pub enum Commands {
     /// Write the commit message for the current directory
     Commit,
     /// List all the available models
-    Models
+    Models,
+    /// Clear the chat history for the current directory
+    Clear
 }
 
 #[cfg(test)]

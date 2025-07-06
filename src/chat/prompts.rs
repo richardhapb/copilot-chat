@@ -25,8 +25,7 @@ Also void using a code block, only put the raw text
 /// Prompt for generating or modifying code snippets directly.
 pub static CODE: &str = r#"
 You are an expert systems developer. Given a function, struct, or code snippet, complete or improve it
-with minimal, efficient, and idiomatic code. Avoid unnecessary abstraction.
-Do not add comments unless the logic is non-obvious. Focus on what actually runs.
+with minimal, efficient, and idiomatic code.
 
 All code must be returned in a fenced code block, with the correct language tag.
 
@@ -43,6 +42,12 @@ Treat the loaded file as available in memory. Focus your output only on the spec
 - If a range `start-end` is given, focus your attention strictly on that range.
 - Use the rest of the file as context only if necessary. But focus in the range provided.
 - Line numbers are for reference only. **Never** use line numbers in your output or code.
+
+When a file is updated, the changes are represented as:
+
+`- 211 fn a_fuction()...`
+`+ 222 fn amazing_function()...`
+Line 211 represents a deletion `-` of the line and the line 222 an insertion `+`.
 
 Your response must:
 - Use the `File` notation to indicate the range you are responding to, following the same format as shown above. This should be placed just above the code block (outside the block). Like:

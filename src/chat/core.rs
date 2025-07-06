@@ -207,6 +207,7 @@ impl<P: Provider + Default> Chat<P> {
             home.join(".cache").join("copilot-chat")
         };
         create_dir_all(&cache)?;
+        info!(?cache, "Saving chat");
 
         let cwd = current_dir()?;
         let encoded = percent_encode(
@@ -217,8 +218,37 @@ impl<P: Provider + Default> Chat<P> {
         );
 
         let cache_file = cache.join(format!("{encoded}.json"));
-        let mut file = File::create(cache_file)?;
+        let mut file = File::create(&cache_file)?;
         file.write_all(serde_json::to_string(self)?.as_bytes())?;
+        info!(?cache_file, "Chat saved successfully");
+        Ok(())
+    }
+
+    /// Delete the saved chat for the current directory
+    pub fn remove_chat(&self, path: Option<&str>) -> anyhow::Result<()> {
+        let cache = if let Some(path) = path {
+            PathBuf::from_str(path)?
+        } else {
+            let home = dirs::home_dir().ok_or(anyhow::anyhow!("read user's home"))?;
+            home.join(".cache").join("copilot-chat")
+        };
+        info!(?cache, "Deleting chat");
+
+        let cwd = current_dir()?;
+        let encoded = percent_encode(
+            cwd.to_str()
+                .ok_or(anyhow::anyhow!("error encoding path"))?
+                .as_bytes(),
+            NON_ALPHANUMERIC,
+        );
+
+        let cache_file = cache.join(format!("{encoded}.json"));
+        if std::fs::exists(&cache_file)? {
+            std::fs::remove_file(&cache_file)?;
+            info!(?cache_file, "Chat deleted successfully");
+        } else {
+            info!(?cache_file, "Chat not found; skipping deletion.");
+        }
         Ok(())
     }
 }

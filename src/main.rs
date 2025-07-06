@@ -6,6 +6,7 @@ use tools::cli::CliExecutor;
 use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
+use crate::client::CopilotClient;
 use crate::client::provider::Provider;
 
 mod chat;
@@ -64,10 +65,22 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
             (MessageType::Commit(user_prompt), Chat::new(client))
-        },
+        }
         Some(Commands::Models) => {
             client.get_models().await?;
             std::process::exit(0);
+        }
+        Some(Commands::Clear) => match Chat::<CopilotClient>::try_load_chat(None)? {
+            Some(chat) => {
+                chat.remove_chat(None)?;
+                println!("Chat cleared successfully");
+                std::process::exit(0)
+            }
+            None => {
+                println!("Chat not found; skipping clearing.");
+                std::process::exit(0);
+            }
+            ,
         },
         // Default
         None => (
@@ -91,7 +104,13 @@ async fn main() -> anyhow::Result<()> {
     // Send with stream by default, maybe in the future a buffered
     // response can be returned if it is configured
     let response_message = chat
-        .send_message_with_stream(cli.model.as_deref(), message, message_type, streamer, writer)
+        .send_message_with_stream(
+            cli.model.as_deref(),
+            message,
+            message_type,
+            streamer,
+            writer,
+        )
         .await?;
 
     chat.add_message(response_message);
