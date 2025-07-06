@@ -1,7 +1,7 @@
 use chat::ChatStreamer;
 use clap::Parser;
 use cli::commands::Cli;
-use std::io::{self, Read};
+use std::io::{self, BufRead};
 use tracing::debug;
 use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -17,46 +17,48 @@ mod tools;
 async fn main() -> anyhow::Result<()> {
     init_logging()?;
     let cli = Cli::parse();
-    
+
     // Dependencies
     let auth = client::auth::CopilotAuth::new();
     let client = client::CopilotClient::new(auth);
     let streamer = ChatStreamer;
     let mut stdin_str = String::new();
-    
+
     // Read only from piped stdin
     if !atty::is(atty::Stream::Stdin) {
         debug!("Reading from stdin");
         // STDIN
         let stdin = io::stdin();
-        stdin.lock().read_to_string(&mut stdin_str)?;
+        stdin.lock().read_line(&mut stdin_str)?;
     }
-    
+
+    debug!{%stdin_str, "Received"};
+
     // Parse the user prompt from CLI if exist - clone to avoid partial move
     let user_prompt = cli.prompt.as_ref().map(|prompt| prompt.join(" "));
-    
-    let mut handler = CommandHandler::new(&cli, stdin_str, user_prompt.as_deref());
-    let mut attr = handler.prepare(client).await?;
-    
+
+    let mut handler = CommandHandler::new(&cli, user_prompt.as_deref());
+    let mut attr = handler.prepare(client, &mut stdin_str).await?;
+
     if attr.execution_type == ExecutionType::Exit {
         std::process::exit(0);
     }
-    
+
     let writer = tokio::io::stdout();
-    
+
     match attr.execution_type {
         ExecutionType::Once => {
-            attr.process_request(&cli, streamer.clone(), writer).await?;
+            attr.process_request(&cli, streamer.clone(), writer, stdin_str).await?;
         }
         ExecutionType::Interactive | ExecutionType::Pipe => {
-            attr.process_loop(&cli, &streamer, writer).await?;
+            attr.process_loop(&cli, &streamer, writer, stdin_str).await?;
             attr.chat.save_chat(None)?;
         }
         ExecutionType::Exit => {
             std::process::exit(0);
         }
     }
-    
+
     Ok(())
 }
 

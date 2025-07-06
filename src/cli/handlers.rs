@@ -4,8 +4,9 @@ use crate::{
     client::{CopilotClient, provider::Provider},
     tools::cli::CliExecutor,
 };
-use std::io::{Read, Write};
-use tracing::debug;
+use std::io::Write;
+use tokio::{io::AsyncReadExt, net::TcpListener};
+use tracing::{debug, info};
 
 #[derive(Debug, PartialEq)]
 #[allow(dead_code)]
@@ -18,20 +19,22 @@ pub enum ExecutionType {
 
 pub struct CommandHandler<'a> {
     cli_command: &'a Cli,
-    stdin_str: String,
     user_prompt: Option<&'a str>,
 }
 
 impl<'a> CommandHandler<'a> {
-    pub fn new(cli_command: &'a Cli, stdin_str: String, user_prompt: Option<&'a str>) -> Self {
+    pub fn new(cli_command: &'a Cli, user_prompt: Option<&'a str>) -> Self {
         Self {
             cli_command,
-            stdin_str,
             user_prompt,
         }
     }
 
-    pub async fn prepare(&mut self, client: CopilotClient) -> anyhow::Result<ExecutionAttributes> {
+    pub async fn prepare(
+        &mut self,
+        client: CopilotClient,
+        stdin_str: &mut String,
+    ) -> anyhow::Result<ExecutionAttributes> {
         let mut execution_type = ExecutionType::Exit;
 
         // Get the message and chat; if the command is `commit`, a new chat is always used.
@@ -39,10 +42,10 @@ impl<'a> CommandHandler<'a> {
             Some(Commands::Commit) => {
                 // If there is not a stdin, try to get the git diff
                 // in the current directory
-                if self.stdin_str.is_empty() {
-                    self.stdin_str = CliExecutor::new().execute("git", &["diff", "--staged"]).await?;
+                if stdin_str.is_empty() {
+                    *stdin_str = CliExecutor::new().execute("git", &["diff", "--staged"]).await?;
 
-                    if self.stdin_str.is_empty() {
+                    if stdin_str.is_empty() {
                         eprintln!("Git diff is empty. Ensure you are in a repository and that the changes are staged.");
                         std::process::exit(1);
                     }
@@ -71,16 +74,19 @@ impl<'a> CommandHandler<'a> {
                 }
             },
             // Default
-            None => (
-                Some(MessageType::Code {
-                    user_prompt: self.user_prompt.map(|p| p.to_string()),
-                    files: self.cli_command.files.clone(),
-                }),
-                Some(match Chat::try_load_chat(None)? {
-                    Some(chat) => chat.with_provider(client),
-                    None => Chat::new(client),
-                }),
-            ),
+            None => {
+                execution_type = ExecutionType::Interactive;
+                (
+                    Some(MessageType::Code {
+                        user_prompt: self.user_prompt.map(|p| p.to_string()),
+                        files: self.cli_command.files.clone(),
+                    }),
+                    Some(match Chat::try_load_chat(None)? {
+                        Some(chat) => chat.with_provider(client),
+                        None => Chat::new(client),
+                    }),
+                )
+            }
         };
 
         let chat = chat.unwrap_or(Chat::new(CopilotClient::default()));
@@ -90,7 +96,6 @@ impl<'a> CommandHandler<'a> {
             chat,
             message_type,
             execution_type,
-            stdin_str: self.stdin_str.clone(),
         })
     }
 }
@@ -100,7 +105,6 @@ pub struct ExecutionAttributes {
     pub chat: Chat<CopilotClient>,
     pub message_type: MessageType,
     pub execution_type: ExecutionType,
-    pub stdin_str: String,
 }
 
 impl ExecutionAttributes {
@@ -109,31 +113,48 @@ impl ExecutionAttributes {
         cli: &Cli,
         streamer: &ChatStreamer,
         writer: tokio::io::Stdout,
+        stdin_str: String,
     ) -> anyhow::Result<()> {
         // First request
         debug!("Processing first message");
-        self.process_request(cli, streamer.clone(), writer).await?;
+        self.process_request(cli, streamer.clone(), writer, stdin_str).await?;
+
+        let tracked_paths = self.chat.tracked_paths();
+        // Attach the files without range
+        let message_type = MessageType::Code {
+            user_prompt: None,
+            files: Some(tracked_paths.into_iter().map(|p| p.to_string()).collect()),
+        };
+        self.message_type = message_type;
 
         let mut stdout = std::io::stdout();
 
         loop {
-            let writer = tokio::io::stdout();
-            debug!("Capturing new message");
-            println!();
-            println!();
-            print!("> ");
-            stdout.flush()?;
-
-            let stdin = std::io::stdin();
             let mut read_str = String::new();
 
-            if !atty::is(atty::Stream::Stdin) {
-                debug!("Reading from stdin piped");
-                // STDIN
-                stdin.lock().read_to_string(&mut read_str)?;
-            } else {
+            debug!("Capturing new message");
+            if atty::is(atty::Stream::Stdin) {
+                // For interactive mode, use blocking stdin.
+                let stdin = std::io::stdin();
+                println!();
+                println!();
+                print!("> ");
+                stdout.flush()?;
+
                 debug!("Reading from interactive mode");
                 stdin.read_line(&mut read_str)?;
+            } else {
+                // For non-interactive use, prefer using a socket because stdin may have been closed
+                // by the client, which can make re-attaching tricky.
+                let req = read_from_socket().await?;
+
+                // Separate the prompt to to prompt acoording to protocol
+                // <file>:<range>@prompt
+                read_str = req.prompt;
+                self.message_type = MessageType::Code {
+                    user_prompt: None,
+                    files: req.files,
+                }
             }
 
             debug!(%read_str, "New user message");
@@ -141,9 +162,11 @@ impl ExecutionAttributes {
                 break;
             }
 
-            self.process_request(cli, streamer.clone(), writer).await?;
+            let writer = tokio::io::stdout();
+            self.process_request(cli, streamer.clone(), writer, read_str.trim().to_string())
+                .await?;
+            self.chat.save_chat(None)?;
         }
-
         Ok(())
     }
 
@@ -152,10 +175,11 @@ impl ExecutionAttributes {
         cli: &Cli,
         streamer: ChatStreamer,
         writer: tokio::io::Stdout,
+        stdin_str: String,
     ) -> anyhow::Result<()> {
         let message = Message {
             role: Role::User,
-            content: self.stdin_str.clone(),
+            content: stdin_str,
         };
 
         debug!(?self.message_type, "User message");
@@ -176,4 +200,55 @@ impl ExecutionAttributes {
 
         Ok(())
     }
+}
+
+/// Separate the prompt to to prompt acoording to protocol
+/// <file>:<range>@prompt
+struct RequestProtocol {
+    prompt: String,
+    files: Option<Vec<String>>,
+}
+
+impl RequestProtocol {
+    fn from_input(raw_input: &str) -> Self {
+        let splitted = raw_input.split_once("@");
+        let (file_str, prompt) = if let Some(splited) = splitted {
+            splited
+        } else {
+            ("", raw_input)
+        };
+
+        // TODO: Handle multiples files
+        let files = if file_str.is_empty() {
+            None
+        } else {
+            Some(vec![file_str.to_string()])
+        };
+
+        Self {
+            prompt: prompt.to_string(),
+            files,
+        }
+    }
+}
+
+async fn read_from_socket() -> anyhow::Result<RequestProtocol> {
+    let mut input = String::new();
+
+    // TODO: Make this dynamic
+    let tcp = TcpListener::bind("127.0.0.1:4000").await?;
+    info!("Listening on 127.0.0.1:4000");
+
+    let (mut connection, addr) = tcp.accept().await?;
+
+    info!(%addr, "Connection received");
+
+    while input.is_empty() {
+        connection.read_to_string(&mut input).await?;
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+
+    debug!(%input, "Received");
+
+    Ok(RequestProtocol::from_input(&input))
 }
