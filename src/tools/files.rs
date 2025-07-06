@@ -32,6 +32,8 @@ impl Readable for TrackedFile {
 #[derive(Debug, Deserialize, Serialize, PartialEq, Clone)]
 pub struct TrackedFile {
     pub path: String,
+    // Avoid save to chat history a copy of the content
+    #[serde(skip)]
     content: String,
     last_modification: SystemTime,
 }
@@ -51,11 +53,23 @@ pub struct FileReader;
 impl ReaderTool for FileReader {
     async fn read<'a>(&self, readable: &'a mut impl Readable) -> anyhow::Result<&'a str> {
         let file_path = readable.location();
-        let content = std::fs::read_to_string(file_path)?;
+
+        // If the file doesn't exist, we don't want to fail, because maybe the file
+        // is deleted, return an empty string instead
+        let content = std::fs::read_to_string(file_path).unwrap_or_else(|_| {
+            debug!(%file_path, "File not found, setting an empty string");
+            String::new()
+        });
 
         debug!(?file_path, "Updating content");
         readable.set_content(content);
-        self.update_modified_time(readable)?;
+
+        // Same case here, avoid to fail
+        self.update_modified_time(readable).unwrap_or_else(|_|{
+            debug!("File not found, updating the modified time to now");
+            // Update this because the file is "up to date" with empty content
+            readable.set_modified_time(SystemTime::now());
+        });
 
         Ok(readable.content())
     }

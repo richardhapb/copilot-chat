@@ -76,7 +76,7 @@ pub trait ReaderTool {
             Ok(Some(diffs))
         } else {
             debug!("Metadata not found, skipping diff computation");
-            // TODO: Consider return all the file as a diff
+            // TODO: Consider return all the file as a diff because file doesn't exist
             Ok(None)
         }
     }

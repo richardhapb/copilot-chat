@@ -143,12 +143,25 @@ impl<P: Provider + Default> Chat<P> {
                         if let Some(index) = tracked_file_index {
                             // File is tracked, check for differences
                             let tracked_file = &mut self.tracked_files[index];
+
+                            // If it is empty, read the content. Then, when trying to diff, it will
+                            // skip it because the modified time is the same.
+                            if tracked_file.content().is_empty() {
+                                info!(%file, "Tracked file content empty, reading");
+                                reader.read(tracked_file).await?;
+                            }
+
                             let file_path = tracked_file.location();
                             info!(?file_path, "File tracked, checking for differences");
 
                             // Check for differences and update
                             let diff_man = reader.get_diffs(tracked_file)?;
-                            reader.update_modified_time(tracked_file)?;
+
+                            // TODO: What happens if the file doesn't exist? The file should be removed
+                            // from tracked_file and Copilot should be noted
+
+                            // Update the cached file content
+                            reader.read(tracked_file).await?;
 
                             if let Some(diff_man) = diff_man {
                                 info!("Differences found, sending to copilot");
