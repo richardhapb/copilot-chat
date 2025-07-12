@@ -12,7 +12,7 @@ use crate::{
     chat::prompts::GENERAL,
     client::provider::Provider,
     tools::{
-        diff::{DiffsManager, Range},
+        diff::{Diff, DiffsManager, Range},
         files::{FileReader, TrackedFile},
         reader::{Readable, ReaderTool},
     },
@@ -376,6 +376,12 @@ impl<'a, P: Provider> Builder<'a, P> {
         );
 
         for diff in diff_man.diffs.iter() {
+            // Skip the unchanged lines
+            match diff {
+                Diff::Match(_) => continue,
+                _ => {}
+            }
+
             content.push_str(&diff.to_string());
         }
 
