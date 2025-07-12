@@ -83,12 +83,15 @@ impl<P: Provider + Default> Chat<P> {
     pub async fn send_message_with_stream(
         &mut self,
         model: Option<&str>,
-        message: Message,
+        message: Option<Message>,
         message_type: MessageType,
         streamer: impl Streamer + 'static,
         mut writer: impl AsyncWrite + Send + Unpin + 'static,
     ) -> Result<Message, ChatError> {
         let mut builder = prepare_builder(&self.provider, &self.messages, message, &message_type)?;
+        if let Some(user_message) = message_type.resolve_user_prompt() {
+            builder.with(user_message);
+        }
         Self::handle_files(&mut self.tracked_files, &message_type, &mut builder).await?;
 
         trace!("sending request to copilot");
@@ -296,7 +299,7 @@ impl<P: Provider + Default> Chat<P> {
 fn prepare_builder<'a, P: Provider>(
     provider: &'a P,
     messages: &'a RefCell<Vec<Message>>,
-    message: Message,
+    message: Option<Message>,
     message_type: &MessageType,
 ) -> Result<Builder<'a, P>, ChatError> {
     let mut builder = provider.builder(messages);
@@ -311,11 +314,7 @@ fn prepare_builder<'a, P: Provider>(
                 content: message_type.to_string(),
             });
     }
-    builder.with(message);
-
-    if let Some(user_message) = message_type.resolve_user_prompt() {
-        builder.with(user_message);
-    }
+    message.map(|m| builder.with(m));
 
     Ok(builder)
 }
@@ -404,6 +403,12 @@ pub enum MessageType {
     Git(Option<String>),
 }
 
+impl Default for MessageType {
+    fn default() -> Self {
+        Self::Code { user_prompt: None, files: None }
+    }
+}
+
 impl Display for MessageType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let prompt = match self {
@@ -427,6 +432,17 @@ impl MessageType {
             role: Role::User,
             content: content.to_string(),
         })
+    }
+
+    pub fn clear_user_prompt(&mut self) {
+        *self = match std::mem::take(self) {
+            MessageType::Code { user_prompt: _, files } => MessageType::Code {
+                user_prompt: None,
+                files,
+            },
+            MessageType::Commit(_) => MessageType::Commit(None),
+            MessageType::Git(_) => MessageType::Git(None),
+        }
     }
 }
 
@@ -481,7 +497,7 @@ mod tests {
         let response = chat
             .send_message_with_stream(
                 None,
-                message,
+                Some(message),
                 MessageType::Code {
                     user_prompt: None,
                     files: None,
@@ -509,7 +525,7 @@ mod tests {
 
         chat.send_message_with_stream(
             None,
-            message,
+            Some(message),
             MessageType::Code {
                 user_prompt: Some("I am an user".to_string()),
                 files: None,

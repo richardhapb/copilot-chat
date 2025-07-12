@@ -119,6 +119,7 @@ impl Streamer for ChatStreamer {
             match receiver.recv().await {
                 Some(content) => {
                     writer.write(content.as_bytes()).await?;
+                    writer.flush().await?
                 }
                 None => {
                     debug!("End of streaming");

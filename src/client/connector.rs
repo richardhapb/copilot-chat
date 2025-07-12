@@ -19,6 +19,16 @@ static USER_AGENT: &str = "curl/8.7.1";
 /// Endpoint for retrieving the availables models
 static MODELS: &str = "https://api.githubcopilot.com/models";
 
+// /// # Mock endpoints for testing
+// /// Endpoint where the auth token is retrieved for use it in completions
+// static HEADERS_URL: &str = "http://localhost:9090/headers";
+// /// Endpoint where Copilot returns a response
+// static COMPLETION_URL: &str = "http://localhost:9090/completion";
+// /// This is used because Copilot requires a specified agent; otherwise, it returns a 403 status code.
+// static USER_AGENT: &str = "curl/8.7.1";
+// /// Endpoint for retrieving the availables models
+// static MODELS: &str = "http://localhost:9090/models";
+
 /// Main Copilot client
 #[derive(Default, Debug, Clone)]
 pub struct CopilotClient {

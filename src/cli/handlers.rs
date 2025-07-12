@@ -113,40 +113,55 @@ impl ExecutionAttributes {
         stdin_str: String,
     ) -> Result<(), ChatError> {
         debug!("Processing first message");
+        let stdin_str = if !stdin_str.is_empty() { Some(stdin_str) } else { None };
+
         self.process_request(cli, streamer.clone(), writer, stdin_str).await?;
+        self.message_type.clear_user_prompt();
 
         let mut stdout = std::io::stdout();
 
         loop {
-            let mut read_str = String::new();
-
             debug!("Capturing new message");
-            if atty::is(atty::Stream::Stdin) {
+
+            self.message_type = if atty::is(atty::Stream::Stdin) {
+                let mut read_str = String::new();
                 let stdin = std::io::stdin();
-                println!("\n\n> ");
+                print!("\n\n> ");
                 stdout.flush().map_err(|e| ChatError::CacheError(e))?;
+
+                let files = match &mut self.message_type {
+                    MessageType::Code { user_prompt: _, files } => files.take(),
+                    _ => None,
+                };
 
                 debug!("Reading from interactive mode");
                 stdin.read_line(&mut read_str).map_err(|e| ChatError::CacheError(e))?;
+
+                if read_str.trim() == "exit" {
+                    break;
+                }
+
+                MessageType::Code {
+                    user_prompt: Some(read_str.trim().to_string()),
+                    files,
+                }
             } else {
                 let req = read_from_socket()
                     .await
                     .map_err(|e| ChatError::RequestError(e.to_string()))?;
-                read_str = req.prompt;
-                self.message_type = MessageType::Code {
-                    user_prompt: None,
+
+                if req.prompt.trim() == "exit" {
+                    break;
+                }
+
+                MessageType::Code {
+                    user_prompt: Some(req.prompt.trim().to_string()),
                     files: req.files,
                 }
-            }
-
-            debug!(%read_str, "New user message");
-            if read_str.trim() == "exit" {
-                break;
-            }
+            };
 
             let writer = tokio::io::stdout();
-            self.process_request(cli, streamer.clone(), writer, read_str.trim().to_string())
-                .await?;
+            self.process_request(cli, streamer.clone(), writer, None).await?;
             self.chat.save_chat(None)?;
         }
         Ok(())
@@ -157,11 +172,16 @@ impl ExecutionAttributes {
         cli: &Cli,
         streamer: ChatStreamer,
         writer: tokio::io::Stdout,
-        stdin_str: String,
+        stdin_str: Option<String>,
     ) -> Result<(), ChatError> {
-        let message = Message {
-            role: Role::User,
-            content: stdin_str,
+        let message = if stdin_str.is_some() {
+            let message = Message {
+                role: Role::User,
+                content: stdin_str.unwrap(),
+            };
+            Some(message)
+        } else {
+            None
         };
 
         debug!(?self.message_type, "User message");
@@ -170,13 +190,12 @@ impl ExecutionAttributes {
             .chat
             .send_message_with_stream(
                 cli.model.as_deref(),
-                message.clone(),
+                message,
                 self.message_type.clone(),
                 streamer.clone(),
                 writer,
             )
             .await?;
-        self.chat.add_message(message);
         self.chat.add_message(response_message);
 
         Ok(())

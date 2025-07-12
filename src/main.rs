@@ -1,7 +1,7 @@
 use chat::ChatStreamer;
 use clap::Parser;
 use cli::commands::Cli;
-use std::io::{self, BufRead};
+use std::io::{self, Read};
 use tracing::debug;
 use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -29,7 +29,9 @@ async fn main() -> anyhow::Result<()> {
         debug!("Reading from stdin");
         // STDIN
         let stdin = io::stdin();
-        stdin.lock().read_line(&mut stdin_str)?;
+        let mut stdin_buf = vec![];
+        stdin.lock().read_to_end(&mut stdin_buf)?;
+        stdin_str = String::from_utf8_lossy(&stdin_buf).to_string();
     }
 
     debug! {%stdin_str, "Received"};
@@ -50,7 +52,7 @@ async fn main() -> anyhow::Result<()> {
 
     match attr.execution_type {
         ExecutionType::Once => {
-            if let Err(e) = attr.process_request(&cli, streamer.clone(), writer, stdin_str).await {
+            if let Err(e) = attr.process_request(&cli, streamer.clone(), writer, Some(stdin_str)).await {
                 eprintln!("Error: {}", e);
             }
         }
