@@ -63,7 +63,7 @@ impl<P: Provider + Default> Chat<P> {
         let encoded = percent_encode(
             cwd.to_str()
                 .ok_or_else(|| {
-                    ChatError::CacheError(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid path"))
+                    ChatError::Cache(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid path"))
                 })?
                 .as_bytes(),
             NON_ALPHANUMERIC,
@@ -98,7 +98,7 @@ impl<P: Provider + Default> Chat<P> {
         let stream = builder
             .request(model.unwrap_or("gpt-4o"))
             .await
-            .map_err(|e| ChatError::ProviderError(e.to_string()))?;
+            .map_err(|e| ChatError::Provider(e.to_string()))?;
 
         debug!("Creating channels");
         let (sender, receiver) = channel(32);
@@ -121,7 +121,7 @@ impl<P: Provider + Default> Chat<P> {
         let message = streamer
             .handle_stream(std::pin::pin!(stream), sender)
             .await
-            .map_err(|e| ChatError::StreamError(e.to_string()))?;
+            .map_err(|e| ChatError::Stream(e.to_string()))?;
 
         job.await?;
 
@@ -139,7 +139,7 @@ impl<P: Provider + Default> Chat<P> {
         let encoded = percent_encode(
             cwd.to_str()
                 .ok_or_else(|| {
-                    ChatError::CacheError(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid path"))
+                    ChatError::Cache(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid path"))
                 })?
                 .as_bytes(),
             NON_ALPHANUMERIC,
@@ -161,7 +161,7 @@ impl<P: Provider + Default> Chat<P> {
         let encoded = percent_encode(
             cwd.to_str()
                 .ok_or_else(|| {
-                    ChatError::CacheError(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid path"))
+                    ChatError::Cache(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid path"))
                 })?
                 .as_bytes(),
             NON_ALPHANUMERIC,
@@ -180,12 +180,12 @@ impl<P: Provider + Default> Chat<P> {
     fn get_cache_path(path: Option<&str>) -> Result<PathBuf, ChatError> {
         if let Some(path) = path {
             PathBuf::from_str(path)
-                .map_err(|e| ChatError::CacheError(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))
+                .map_err(|e| ChatError::Cache(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))
         } else {
             dirs::home_dir()
                 .map(|home| home.join(".cache").join("copilot-chat"))
                 .ok_or_else(|| {
-                    ChatError::CacheError(std::io::Error::new(
+                    ChatError::Cache(std::io::Error::new(
                         std::io::ErrorKind::NotFound,
                         "Home directory not found",
                     ))
@@ -198,12 +198,10 @@ impl<P: Provider + Default> Chat<P> {
         message_type: &MessageType,
         builder: &mut Builder<'a, P>,
     ) -> Result<(), ChatError> {
-        if let MessageType::Code { files, .. } = message_type {
-            if let Some(files) = files {
-                for file in files {
-                    debug!(%file, "Processing file");
-                    Self::process_file(tracked_files, file, builder).await?;
-                }
+        if let MessageType::Code { files: Some(files), .. } = message_type {
+            for file in files {
+                debug!(%file, "Processing file");
+                Self::process_file(tracked_files, file, builder).await?;
             }
         }
         Ok(())
@@ -230,7 +228,7 @@ impl<P: Provider + Default> Chat<P> {
                 reader
                     .read(&mut tracked_file)
                     .await
-                    .map_err(|e| ChatError::ToolError(e.to_string()))?;
+                    .map_err(|e| ChatError::Tool(e.to_string()))?;
             }
 
             let file_path = tracked_file.location();
@@ -238,11 +236,11 @@ impl<P: Provider + Default> Chat<P> {
 
             let diff_man = reader
                 .get_diffs(&tracked_file)
-                .map_err(|e| ChatError::ToolError(e.to_string()))?;
+                .map_err(|e| ChatError::Tool(e.to_string()))?;
             reader
                 .read(&mut tracked_file)
                 .await
-                .map_err(|e| ChatError::ToolError(e.to_string()))?;
+                .map_err(|e| ChatError::Tool(e.to_string()))?;
 
             if let Some(diff_man) = diff_man {
                 info!("Differences found, sending to copilot");
@@ -255,7 +253,7 @@ impl<P: Provider + Default> Chat<P> {
             let file_content = tracked_file
                 .prepare_for_copilot(range.as_ref())
                 .await
-                .map_err(|e| ChatError::ToolError(e.to_string()))?;
+                .map_err(|e| ChatError::Tool(e.to_string()))?;
             builder.with(Message {
                 content: file_content,
                 role: Role::User,
@@ -267,7 +265,7 @@ impl<P: Provider + Default> Chat<P> {
             reader
                 .read(&mut tracked_file)
                 .await
-                .map_err(|e| ChatError::ToolError(e.to_string()))?;
+                .map_err(|e| ChatError::Tool(e.to_string()))?;
 
             let file_path = tracked_file.location();
             info!(?file_path, "File not tracked, sending to copilot");
@@ -275,7 +273,7 @@ impl<P: Provider + Default> Chat<P> {
             let load_content = tracked_file
                 .prepare_load_once()
                 .await
-                .map_err(|e| ChatError::ToolError(e.to_string()))?;
+                .map_err(|e| ChatError::Tool(e.to_string()))?;
             builder.with(Message {
                 content: load_content,
                 role: Role::User,
@@ -284,7 +282,7 @@ impl<P: Provider + Default> Chat<P> {
             let copilot_content = tracked_file
                 .prepare_for_copilot(range.as_ref())
                 .await
-                .map_err(|e| ChatError::ToolError(e.to_string()))?;
+                .map_err(|e| ChatError::Tool(e.to_string()))?;
             builder.with(Message {
                 content: copilot_content,
                 role: Role::User,
@@ -377,10 +375,7 @@ impl<'a, P: Provider> Builder<'a, P> {
 
         for diff in diff_man.diffs.iter() {
             // Skip the unchanged lines
-            match diff {
-                Diff::Match(_) => continue,
-                _ => {}
-            }
+            if let Diff::Match(_) = diff { continue };
 
             content.push_str(&diff.to_string());
         }
@@ -411,7 +406,10 @@ pub enum MessageType {
 
 impl Default for MessageType {
     fn default() -> Self {
-        Self::Code { user_prompt: None, files: None }
+        Self::Code {
+            user_prompt: None,
+            files: None,
+        }
     }
 }
 

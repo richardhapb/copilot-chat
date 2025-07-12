@@ -118,7 +118,7 @@ impl Streamer for ChatStreamer {
         loop {
             match receiver.recv().await {
                 Some(content) => {
-                    writer.write(content.as_bytes()).await?;
+                    writer.write_all(content.as_bytes()).await?;
                     writer.flush().await?
                 }
                 None => {

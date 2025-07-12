@@ -127,7 +127,7 @@ impl ExecutionAttributes {
                 let mut read_str = String::new();
                 let stdin = std::io::stdin();
                 print!("\n\n> ");
-                stdout.flush().map_err(|e| ChatError::CacheError(e))?;
+                stdout.flush().map_err(ChatError::Cache)?;
 
                 let files = match &mut self.message_type {
                     MessageType::Code { user_prompt: _, files } => files.take(),
@@ -135,7 +135,7 @@ impl ExecutionAttributes {
                 };
 
                 debug!("Reading from interactive mode");
-                stdin.read_line(&mut read_str).map_err(|e| ChatError::CacheError(e))?;
+                stdin.read_line(&mut read_str).map_err(ChatError::Cache)?;
 
                 if read_str.trim() == "exit" {
                     break;
@@ -148,7 +148,7 @@ impl ExecutionAttributes {
             } else {
                 let req = read_from_socket()
                     .await
-                    .map_err(|e| ChatError::RequestError(e.to_string()))?;
+                    .map_err(|e| ChatError::Request(e.to_string()))?;
 
                 if req.prompt.trim() == "exit" {
                     break;
@@ -174,10 +174,10 @@ impl ExecutionAttributes {
         writer: tokio::io::Stdout,
         stdin_str: Option<String>,
     ) -> Result<(), ChatError> {
-        let message = if stdin_str.is_some() {
+        let message = if let Some(stdin_str) = stdin_str {
             let message = Message {
                 role: Role::User,
-                content: stdin_str.unwrap(),
+                content: stdin_str,
             };
             Some(message)
         } else {

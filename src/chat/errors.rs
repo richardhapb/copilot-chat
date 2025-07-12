@@ -3,17 +3,17 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum ChatError {
     #[error("Failed to access chat cache: {0}")]
-    CacheError(#[from] std::io::Error),
+    Cache(#[from] std::io::Error),
     #[error("Failed to (de)serialize chat: {0}")]
-    SerdeError(#[from] serde_json::Error),
+    Serde(#[from] serde_json::Error),
     #[error("Failed to build chat request: {0}")]
-    RequestError(String),
+    Request(String),
     #[error("Failed to process stream: {0}")]
-    StreamError(String),
+    Stream(String),
     #[error("Provider error: {0}")]
-    ProviderError(String),
+    Provider(String),
     #[error("Tool error: {0}")]
-    ToolError(String),
+    Tool(String),
     #[error("Tokio join error: {0}")]
-    JoinError(#[from] tokio::task::JoinError),
+    Join(#[from] tokio::task::JoinError),
 }
