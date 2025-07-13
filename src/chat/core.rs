@@ -62,9 +62,7 @@ impl<P: Provider + Default> Chat<P> {
         let cwd = current_dir()?;
         let encoded = percent_encode(
             cwd.to_str()
-                .ok_or_else(|| {
-                    ChatError::Cache(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid path"))
-                })?
+                .ok_or_else(|| ChatError::Cache(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid path")))?
                 .as_bytes(),
             NON_ALPHANUMERIC,
         );
@@ -89,10 +87,10 @@ impl<P: Provider + Default> Chat<P> {
         mut writer: impl AsyncWrite + Send + Unpin + 'static,
     ) -> Result<Message, ChatError> {
         let mut builder = prepare_builder(&self.provider, &self.messages, message, &message_type)?;
+        Self::handle_files(&mut self.tracked_files, &message_type, &mut builder).await?;
         if let Some(user_message) = message_type.resolve_user_prompt() {
             builder.with(user_message);
         }
-        Self::handle_files(&mut self.tracked_files, &message_type, &mut builder).await?;
 
         trace!("sending request to copilot");
         let stream = builder
@@ -138,9 +136,7 @@ impl<P: Provider + Default> Chat<P> {
         let cwd = current_dir()?;
         let encoded = percent_encode(
             cwd.to_str()
-                .ok_or_else(|| {
-                    ChatError::Cache(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid path"))
-                })?
+                .ok_or_else(|| ChatError::Cache(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid path")))?
                 .as_bytes(),
             NON_ALPHANUMERIC,
         );
@@ -160,9 +156,7 @@ impl<P: Provider + Default> Chat<P> {
         let cwd = current_dir()?;
         let encoded = percent_encode(
             cwd.to_str()
-                .ok_or_else(|| {
-                    ChatError::Cache(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid path"))
-                })?
+                .ok_or_else(|| ChatError::Cache(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid path")))?
                 .as_bytes(),
             NON_ALPHANUMERIC,
         );
@@ -250,14 +244,16 @@ impl<P: Provider + Default> Chat<P> {
                 debug!("No differences found, skipping the update.");
             }
 
-            let file_content = tracked_file
-                .prepare_for_copilot(range.as_ref())
-                .await
-                .map_err(|e| ChatError::Tool(e.to_string()))?;
-            builder.with(Message {
-                content: file_content,
-                role: Role::User,
-            });
+            if let Some(range) = range {
+                let file_content = tracked_file
+                    .prepare_for_copilot(&range)
+                    .await
+                    .map_err(|e| ChatError::Tool(e.to_string()))?;
+                builder.with(Message {
+                    content: file_content,
+                    role: Role::User,
+                });
+            }
 
             tracked_files.insert(index, tracked_file);
         } else {
@@ -279,14 +275,17 @@ impl<P: Provider + Default> Chat<P> {
                 role: Role::User,
             });
 
-            let copilot_content = tracked_file
-                .prepare_for_copilot(range.as_ref())
-                .await
-                .map_err(|e| ChatError::Tool(e.to_string()))?;
-            builder.with(Message {
-                content: copilot_content,
-                role: Role::User,
-            });
+            // Only indicate the file name and range if a range exists
+            if let Some(range) = range {
+                let copilot_content = tracked_file
+                    .prepare_for_copilot(&range)
+                    .await
+                    .map_err(|e| ChatError::Tool(e.to_string()))?;
+                builder.with(Message {
+                    content: copilot_content,
+                    role: Role::User,
+                });
+            }
 
             tracked_files.push(tracked_file);
         }
@@ -375,7 +374,9 @@ impl<'a, P: Provider> Builder<'a, P> {
 
         for diff in diff_man.diffs.iter() {
             // Skip the unchanged lines
-            if let Diff::Match(_) = diff { continue };
+            if let Diff::Match(_) = diff {
+                continue;
+            };
 
             content.push_str(&diff.to_string());
         }

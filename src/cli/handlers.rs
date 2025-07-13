@@ -116,6 +116,7 @@ impl ExecutionAttributes {
         let stdin_str = if !stdin_str.is_empty() { Some(stdin_str) } else { None };
 
         self.process_request(cli, streamer.clone(), writer, stdin_str).await?;
+        self.chat.save_chat(None)?;
         self.message_type.clear_user_prompt();
 
         let mut stdout = std::io::stdout();

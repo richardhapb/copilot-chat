@@ -8,7 +8,7 @@ pub struct Cli {
     pub command: Option<Commands>,
 
     /// File path for being read by Copilot
-    #[arg(short, long)]
+    #[arg(short, long, value_delimiter = ',')]
     pub files: Option<Vec<String>>,
 
     /// Token path

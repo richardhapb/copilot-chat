@@ -122,16 +122,12 @@ impl TrackedFile {
 
     /// Prepare the necesary data for copilot
     /// - Add the file name and indicate the range selected by the user
-    pub async fn prepare_for_copilot(&mut self, range: Option<&Range>) -> anyhow::Result<String> {
-        if let Some(range) = range {
-            let mut range_str = range.to_string();
-            if range.end == 0 {
-                range_str = range_str.split_once("-").unwrap_or((&range_str, "")).0.to_string();
-            }
-            Ok(format!("File: {}{}", self.path, range_str,))
-        } else {
-            Ok(format!("File: {}", self.path))
+    pub async fn prepare_for_copilot(&mut self, range: &Range) -> anyhow::Result<String> {
+        let mut range_str = range.to_string();
+        if range.end == 0 {
+            range_str = range_str.split_once("-").unwrap_or((&range_str, "")).0.to_string();
         }
+        Ok(format!("File: {}{}", self.path, range_str,))
     }
 }
 
@@ -235,7 +231,7 @@ mod tests {
 
         let range = Range::from_file_arg(&format!("{}:1-2", readable.location()));
         let prepared = file_tracked
-            .prepare_for_copilot(range.as_ref())
+            .prepare_for_copilot(&range.unwrap())
             .await
             .expect("prepare the request");
 
