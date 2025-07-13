@@ -60,9 +60,6 @@ async fn main() -> anyhow::Result<()> {
             if let Err(e) = attr.process_loop(&cli, &streamer, writer, stdin_str).await {
                 eprintln!("Error: {}", e);
             }
-            if let Err(e) = attr.chat.save_chat(None) {
-                eprintln!("Error saving chat: {}", e);
-            }
         }
         ExecutionType::Exit => {
             std::process::exit(0);

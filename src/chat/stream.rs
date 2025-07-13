@@ -32,8 +32,8 @@ pub trait Streamer: Clone + Send {
             let chunk = chunk?;
 
             let mut chunk_str = String::from_utf8_lossy(&chunk);
-            if partial_chunk.is_some() {
-                chunk_str = format!("{}{}", partial_chunk.unwrap(), chunk_str).into();
+            if let Some(partial_chunk) = partial_chunk {
+                chunk_str = format!("{}{}", partial_chunk, chunk_str).into();
             }
             partial_chunk = self
                 .process_chunk(&chunk_str, &mut response, &sender)
