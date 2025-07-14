@@ -11,6 +11,10 @@ pub struct Cli {
     #[arg(short, long, value_delimiter = ',')]
     pub files: Option<Vec<String>>,
 
+    /// File or directory name to be excluded from `*` pattern matches
+    #[arg(short, long, value_delimiter = ',')]
+    pub exclude: Option<Vec<String>>,
+
     /// Token path
     #[arg(short, long)]
     token_path: Option<String>,

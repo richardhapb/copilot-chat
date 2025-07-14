@@ -4,7 +4,8 @@ use crate::{
     client::{CopilotClient, provider::Provider},
     tools::cli::CliExecutor,
 };
-use std::io::Write;
+use std::path::PathBuf;
+use std::{env::current_dir, fs::read_dir, io::Write};
 use tokio::{io::AsyncReadExt, net::TcpListener};
 use tracing::{debug, info};
 
@@ -75,7 +76,7 @@ impl<'a> CommandHandler<'a> {
                 (
                     Some(MessageType::Code {
                         user_prompt: self.user_prompt.map(|p| p.to_string()),
-                        files: self.cli_command.files.clone(),
+                        files: Self::expand_files(self.cli_command.files.as_ref(), self.cli_command.exclude.as_ref())?,
                     }),
                     Some(match Chat::try_load_chat(None)? {
                         Some(chat) => chat.with_provider(client),
@@ -94,6 +95,70 @@ impl<'a> CommandHandler<'a> {
             message_type,
             execution_type,
         })
+    }
+
+    /// Expand the operator `*` to retrieve all the files inside the current directory that match
+    /// with the extension if any, for example: `*.rs` expanded to all Rust source code inside this
+    /// directory and child directories. Also exclude all the file or directory names that match
+    /// with any of the `exclude` vector
+    fn expand_files(
+        files: Option<&Vec<String>>,
+        exclude: Option<&Vec<String>>,
+    ) -> std::io::Result<Option<Vec<String>>> {
+        if let Some(files) = files {
+            let mut files_result: Vec<String> = vec![];
+            for file in files {
+                if file.contains("*") {
+                    // TODO: This handles `*` if it does not have an extension?
+                    let ext = file.strip_prefix("*.").unwrap_or("");
+                    let cwd = current_dir()?;
+                    files_result.append(&mut Self::find_files_with_ext(cwd, ext, files, exclude)?);
+                } else {
+                    files_result.push(file.to_string())
+                }
+            }
+            Ok(Some(files_result))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Walk through the directories recursively and look for all files that match the pattern
+    /// also exlude the files or directories that match with any element in `exlude`
+    fn find_files_with_ext(
+        dir: PathBuf,
+        ext: &str,
+        files: &Vec<String>,
+        exclude: Option<&Vec<String>>,
+    ) -> std::io::Result<Vec<String>> {
+        let elements = read_dir(dir)?;
+        let mut files_result: Vec<String> = vec![];
+
+        for element in elements {
+            let element = element?;
+            let metadata = element.metadata()?;
+
+            if let Some(name) = element.file_name().to_str() {
+                if let Some(exclude) = exclude
+                    && exclude.iter().any(|ex| ex == name)
+                {
+                    continue;
+                }
+            }
+
+            if metadata.is_dir() {
+                let mut files_inner = Self::find_files_with_ext(element.path(), ext, files, exclude)?;
+                files_result.append(&mut files_inner);
+            } else if metadata.is_file() {
+                // TODO: Enhance this
+                let path = element.path().to_str().unwrap_or("").to_string();
+                if path.ends_with(ext) && !files.contains(&path) {
+                    files_result.push(path);
+                }
+            }
+        }
+
+        Ok(files_result)
     }
 }
 
