@@ -35,10 +35,7 @@ pub trait Streamer: Clone + Send {
             if let Some(partial_chunk) = partial_chunk {
                 chunk_str = format!("{}{}", partial_chunk, chunk_str).into();
             }
-            partial_chunk = self
-                .process_chunk(&chunk_str, &mut response, &sender)
-                .await
-                .unwrap_or(None)
+            partial_chunk = self.process_chunk(&chunk_str, &mut response, &sender).await?
         }
 
         Ok(Message {
@@ -72,16 +69,36 @@ pub trait Streamer: Clone + Send {
                     }
                 }
                 Err(e) => {
-                    // Is the last, should be a cutted chunk
-                    if chunks.count() == i + 1 {
-                        return Ok(Some(chunk.to_string()));
+                    // Try to serialize the error if matches with the format
+                    let err = serde_json::from_str::<CopilotError>(&chunk);
+
+                    match err {
+                        Ok(err) => return Err(anyhow::anyhow!(err.error.message)),
+                        Err(_) => {
+                            // Is the last chunk, should be a cutted chunk
+                            if chunks.count() == i + 1 {
+                                return Ok(Some(chunk.to_string()));
+                            }
+                        }
                     }
+
+                    // Default
                     return Err(e.into());
                 }
             }
         }
         Ok(None)
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct CopilotError {
+    error: CopilotErrorDetail,
+}
+
+#[derive(Debug, Deserialize)]
+struct CopilotErrorDetail {
+    message: String,
 }
 
 /// Copilot response data
