@@ -76,7 +76,11 @@ impl<'a> CommandHandler<'a> {
                 (
                     Some(MessageType::Code {
                         user_prompt: self.user_prompt.map(|p| p.to_string()),
-                        files: Self::expand_files(self.cli_command.files.as_ref(), self.cli_command.exclude.as_ref())?,
+                        files: Self::expand_files_from_dir(
+                            &current_dir()?,
+                            self.cli_command.files.as_ref(),
+                            self.cli_command.exclude.as_ref(),
+                        )?,
                     }),
                     Some(match Chat::try_load_chat(None)? {
                         Some(chat) => chat.with_provider(client),
@@ -101,7 +105,8 @@ impl<'a> CommandHandler<'a> {
     /// with the extension if any, for example: `*.rs` expanded to all Rust source code inside this
     /// directory and child directories. Also exclude all the file or directory names that match
     /// with any of the `exclude` vector
-    fn expand_files(
+    fn expand_files_from_dir(
+        cwd: &PathBuf,
         files: Option<&Vec<String>>,
         exclude: Option<&Vec<String>>,
     ) -> std::io::Result<Option<Vec<String>>> {
@@ -111,8 +116,7 @@ impl<'a> CommandHandler<'a> {
                 if file.contains("*") {
                     // TODO: This handles `*` if it does not have an extension?
                     let ext = file.strip_prefix("*.").unwrap_or("");
-                    let cwd = current_dir()?;
-                    files_result.append(&mut Self::find_files_with_ext(cwd, ext, files, exclude)?);
+                    files_result.append(&mut Self::find_files_with_ext(cwd.clone(), ext, files, exclude)?);
                 } else {
                     files_result.push(file.to_string())
                 }
@@ -152,7 +156,7 @@ impl<'a> CommandHandler<'a> {
             } else if metadata.is_file() {
                 // TODO: Enhance this
                 let path = element.path().to_str().unwrap_or("").to_string();
-                if path.ends_with(ext) && !files.contains(&path) {
+                if path.ends_with(&format!(".{}", ext)) && !files.contains(&path) {
                     files_result.push(path);
                 }
             }
@@ -320,4 +324,60 @@ async fn read_from_socket() -> anyhow::Result<RequestProtocol> {
     }
     debug!(%input, "Received");
     Ok(RequestProtocol::from_input(&input))
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+    use std::fs;
+
+    use super::*;
+
+    // Test the usage of the `*.rs` pattern in the files argument.
+    #[test]
+    fn expand_files() {
+        let mut cli = Cli::parse();
+        let dir = std::env::temp_dir();
+        let mut expected_files = vec![];
+
+        for d in vec!["subdir1", "subdir2"].iter() {
+            let subdir = dir.join(d);
+            println!("{:?}", subdir);
+            fs::create_dir_all(&subdir).expect("create dir");
+            for f in vec!["file1.rs", "file2.rs"].iter() {
+                let file = subdir.join(f);
+                fs::File::create(&file).expect("create file");
+
+                fs::File::create(subdir.join(format!("{}_ignored.go", f.to_string()))).expect("create file");
+                expected_files.push(file);
+            }
+            fs::File::create(subdir.join("should_be_ignored.py")).expect("create file");
+            // Ensure that finalized files in `rs` are ignored in favor of `.rs`
+            fs::File::create(subdir.join("randomrs")).expect("create file");
+        }
+
+        let root_file = dir.join("root_file.rs");
+        fs::File::create(&root_file).expect("create file");
+
+        expected_files.push(root_file);
+
+        // This should be ignored
+        fs::File::create(dir.join("ignored.rs")).expect("create file");
+        fs::File::create(dir.join("another.go")).expect("create file");
+
+        cli.files = Some(vec!["*.rs".into()]);
+        cli.exclude = Some(vec!["ignored.rs".into()]);
+
+        let result = CommandHandler::expand_files_from_dir(&dir, cli.files.as_ref(), cli.exclude.as_ref()).unwrap();
+        let mut expected = expected_files
+            .iter()
+            .map(|f| f.to_str().expect("convert to str").to_string())
+            .collect::<Vec<_>>();
+
+        let mut result = result.unwrap();
+        result.sort();
+        expected.sort();
+
+        assert_eq!(result, expected)
+    }
 }
