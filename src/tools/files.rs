@@ -136,17 +136,24 @@ mod tests {
     use super::*;
     use std::fs::File;
     use std::io::Write;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    #[derive(Debug)]
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    #[derive(Debug, Clone)]
     struct MockFile {
         content: String,
+        path: String,
         _timemod: SystemTime,
     }
 
-    impl Default for MockFile {
-        fn default() -> Self {
+    impl MockFile {
+        fn new_unique() -> Self {
+            let id = COUNTER.fetch_add(1, Ordering::SeqCst);
+            let path = format!("/tmp/copilot-test-{}", id);
             Self {
                 content: "".into(),
+                path,
                 _timemod: SystemTime::now(),
             }
         }
@@ -154,13 +161,12 @@ mod tests {
 
     impl Readable for MockFile {
         fn location(&self) -> &str {
-            let temp = "/tmp/copilot-test";
-            let mut file = File::create(temp).expect("create the file");
+            let mut file = File::create(self.path.clone()).expect("create the file");
 
             file.write("Hello\nWelcome to Copilot\nTell me something\n".as_bytes())
                 .expect("write to the file");
 
-            temp
+            &self.path
         }
 
         fn set_content(&mut self, content: String) {
@@ -183,11 +189,13 @@ mod tests {
     #[tokio::test]
     async fn numbered_lines() {
         let reader = FileReader;
-        let mut readable = MockFile::default();
+        let mut readable = MockFile::new_unique();
         let _ = reader.read(&mut readable).await.expect("read the file");
         let numbered = readable.add_line_numbers();
 
-        assert_eq!(numbered, "1: Hello\n2: Welcome to Copilot\n3: Tell me something\n")
+        assert_eq!(numbered, "1: Hello\n2: Welcome to Copilot\n3: Tell me something\n");
+
+        std::fs::remove_file(readable.location()).expect("cleanup the file");
     }
 
     #[test]
@@ -202,7 +210,7 @@ mod tests {
 
     #[tokio::test]
     async fn prepare_once() {
-        let mut readable = MockFile::default();
+        let mut readable = MockFile::new_unique();
         let mut file_tracked = TrackedFile::new(None);
         let reader = FileReader;
         reader.read(&mut readable).await.expect("read the file");
@@ -214,13 +222,15 @@ mod tests {
 
         assert_eq!(
             prepared,
-            "File: /tmp/copilot-test [load-once]\n\n1: Hello\n2: Welcome to Copilot\n3: Tell me something\n"
-        )
+            format!("File: {} [load-once]\n\n1: Hello\n2: Welcome to Copilot\n3: Tell me something\n", readable.location())
+        );
+
+        std::fs::remove_file(readable.location()).expect("cleanup the file");
     }
 
     #[tokio::test]
     async fn prepare_copilot() {
-        let mut readable = MockFile::default();
+        let mut readable = MockFile::new_unique();
         let mut file_tracked = TrackedFile::new(None);
         let reader = FileReader;
 
@@ -235,6 +245,8 @@ mod tests {
             .await
             .expect("prepare the request");
 
-        assert_eq!(prepared, "File: /tmp/copilot-test:1-2")
+        assert_eq!(prepared, format!("File: {}:1-2", readable.location()));
+
+        std::fs::remove_file(readable.location()).expect("cleanup the file");
     }
 }
