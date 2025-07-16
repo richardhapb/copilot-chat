@@ -330,6 +330,7 @@ async fn read_from_socket() -> anyhow::Result<RequestProtocol> {
 mod tests {
     use clap::Parser;
     use std::fs;
+    use tempfile::tempdir;
 
     use super::*;
 
@@ -337,7 +338,8 @@ mod tests {
     #[test]
     fn expand_files() {
         let mut cli = Cli::parse();
-        let dir = std::env::temp_dir();
+        let temp = tempdir().expect("create temp dir");
+        let dir = temp.path();
         let mut expected_files = vec![];
 
         for d in vec!["subdir1", "subdir2"].iter() {
@@ -368,7 +370,7 @@ mod tests {
         cli.files = Some(vec!["*.rs".into()]);
         cli.exclude = Some(vec!["ignored.rs".into()]);
 
-        let result = CommandHandler::expand_files_from_dir(&dir, cli.files.as_ref(), cli.exclude.as_ref()).unwrap();
+        let result = CommandHandler::expand_files_from_dir(&dir.to_path_buf(), cli.files.as_ref(), cli.exclude.as_ref()).unwrap();
         let mut expected = expected_files
             .iter()
             .map(|f| f.to_str().expect("convert to str").to_string())
