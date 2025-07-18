@@ -77,7 +77,7 @@ impl<P: Provider + Default> Chat<P> {
     }
 
     /// Send a message to Copilot and write the response to `Stdout` using the streamed data
-    /// also returns the `System` message when it is ready.
+    /// also returns the `Assistant` message when it is ready.
     pub async fn send_message_with_stream(
         &mut self,
         model: Option<&str>,
@@ -328,6 +328,8 @@ pub struct Message {
 pub enum Role {
     #[serde(rename = "system")]
     System,
+    #[serde(rename = "assistant")]
+    Assistant,
     #[serde(rename = "user")]
     User,
 }

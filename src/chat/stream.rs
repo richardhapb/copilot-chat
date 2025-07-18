@@ -39,7 +39,7 @@ pub trait Streamer: Clone + Send {
         }
 
         Ok(Message {
-            role: Role::System,
+            role: Role::Assistant,
             content: response,
         })
     }
@@ -64,8 +64,10 @@ pub trait Streamer: Clone + Send {
                         && let Some(msg) = &choice.delta
                     {
                         let msg = msg.content.clone();
-                        destination.push_str(&msg);
-                        sender.send(msg).await?;
+                        if let Some(msg) = msg {
+                            destination.push_str(&msg);
+                            sender.send(msg).await?;
+                        }
                     }
                 }
                 Err(e) => {
@@ -110,7 +112,7 @@ struct CopilotResponse {
 /// Content 'delta' of the message: a partial chunk of the complete message
 #[derive(Deserialize, Debug)]
 struct Delta {
-    content: String,
+    content: Option<String>,
 }
 
 /// All options and content related to the response
