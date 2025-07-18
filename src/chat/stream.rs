@@ -5,7 +5,7 @@ use futures_util::{Stream, StreamExt};
 use serde::Deserialize;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tracing::{debug, trace};
+use tracing::{debug, error, trace};
 
 /// Handle the stream and all related actions. Use channels to communicate with the
 /// caller and write the content to the `writer`.
@@ -58,6 +58,12 @@ pub trait Streamer: Clone + Send {
                 continue;
             }
             let begin = "data: ".len();
+            // This marks the end of the stream
+            if chunk[begin..].starts_with("[DONE]") {
+                debug!("DONE detected");
+                return Ok(None);
+            }
+
             match serde_json::from_str::<CopilotResponse>(&chunk[begin..]) {
                 Ok(resp_msg) => {
                     if let Some(choice) = resp_msg.choices.first()
@@ -72,12 +78,15 @@ pub trait Streamer: Clone + Send {
                 }
                 Err(e) => {
                     // Try to serialize the error if matches with the format
-                    let err = serde_json::from_str::<CopilotError>(&chunk);
+                    let err = serde_json::from_str::<CopilotError>(&chunk[begin..]);
 
                     match err {
-                        Ok(err) => return Err(anyhow::anyhow!(err.error.message)),
+                        Ok(err) => {
+                            error!(err.error.message, "error in stream");
+                            return Err(anyhow::anyhow!(err.error.message));
+                        }
                         Err(_) => {
-                            // Is the last chunk, should be a cutted chunk
+                            // If this is the last chunk and appears to be incomplete, return it as a partial chunk.
                             if chunks.count() == i + 1 {
                                 return Ok(Some(chunk.to_string()));
                             }
