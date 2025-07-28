@@ -37,8 +37,10 @@ impl<'a> CommandHandler<'a> {
         stdin_str: &mut String,
     ) -> anyhow::Result<ExecutionAttributes> {
         let mut execution_type = ExecutionType::Exit;
+        let mut is_tcp = false;
+        let mut final_port = "4000";
 
-        let (message_type, chat) = match self.cli_command.command {
+        let (message_type, chat) = match &self.cli_command.command {
             Some(Commands::Commit) => {
                 if stdin_str.is_empty() {
                     *stdin_str = CliExecutor::new().execute("git", &["diff", "--staged"]).await?;
@@ -71,6 +73,23 @@ impl<'a> CommandHandler<'a> {
                     (None, None)
                 }
             },
+            Some(Commands::Tcp { port }) => {
+                if let Some(port) = port {
+                    final_port = port
+                }
+                is_tcp = true;
+                execution_type = ExecutionType::Interactive;
+                (
+                    Some(MessageType::Code {
+                        user_prompt: None,
+                        files: None,
+                    }),
+                    Some(match Chat::try_load_chat(None)? {
+                        Some(chat) => chat.with_provider(client),
+                        None => Chat::new(client),
+                    }),
+                )
+            }
             None => {
                 execution_type = ExecutionType::Interactive;
                 (
@@ -98,6 +117,8 @@ impl<'a> CommandHandler<'a> {
             chat,
             message_type,
             execution_type,
+            is_tcp,
+            port: final_port.to_string(),
         })
     }
 
@@ -171,6 +192,8 @@ pub struct ExecutionAttributes {
     pub chat: Chat<CopilotClient>,
     pub message_type: MessageType,
     pub execution_type: ExecutionType,
+    pub is_tcp: bool,
+    pub port: String,
 }
 
 impl ExecutionAttributes {
@@ -184,21 +207,27 @@ impl ExecutionAttributes {
         debug!("Processing first message");
         let stdin_str = if !stdin_str.is_empty() { Some(stdin_str) } else { None };
 
-        self.process_request(cli, streamer.clone(), writer, stdin_str).await?;
-        self.chat.save_chat(None)?;
-        self.message_type.clear_user_prompt();
+        // TODO: Refactor this...
+
+        if !self.is_tcp {
+            self.process_request(cli, streamer.clone(), writer, stdin_str).await?;
+            self.chat.save_chat(None)?;
+            self.message_type.clear_user_prompt();
+        }
 
         let mut stdout = std::io::stdout();
 
+        // Main interaction loop
         loop {
             debug!("Capturing new message");
 
-            self.message_type = if atty::is(atty::Stream::Stdin) {
+            self.message_type = if !self.is_tcp {
                 let mut read_str = String::new();
                 let stdin = std::io::stdin();
                 print!("\n\n> ");
                 stdout.flush().map_err(ChatError::Cache)?;
 
+                // Preserve files from previous message
                 let files = match &mut self.message_type {
                     MessageType::Code { user_prompt: _, files } => files.take(),
                     _ => None,
@@ -216,7 +245,8 @@ impl ExecutionAttributes {
                     files,
                 }
             } else {
-                let req = read_from_socket()
+                // TCP mode - receive request over socket
+                let req = read_from_socket(&self.port)
                     .await
                     .map_err(|e| ChatError::Request(e.to_string()))?;
 
@@ -295,9 +325,10 @@ impl RequestProtocol {
     }
 }
 
-async fn read_from_socket() -> anyhow::Result<RequestProtocol> {
-    let tcp = TcpListener::bind("127.0.0.1:4000").await?;
-    info!("Listening on 127.0.0.1:4000");
+async fn read_from_socket(port: &str) -> anyhow::Result<RequestProtocol> {
+    let bind = format!("127.0.0.1:{}", port);
+    let tcp = TcpListener::bind(&bind).await?;
+    info!("Listening on {}", bind);
     let (mut connection, addr) = tcp.accept().await?;
     info!(%addr, "Connection received");
     let mut input = String::new();
@@ -344,7 +375,6 @@ mod tests {
 
         for d in vec!["subdir1", "subdir2"].iter() {
             let subdir = dir.join(d);
-            println!("{:?}", subdir);
             fs::create_dir_all(&subdir).expect("create dir");
             for f in vec!["file1.rs", "file2.rs"].iter() {
                 let file = subdir.join(f);
@@ -370,7 +400,9 @@ mod tests {
         cli.files = Some(vec!["*.rs".into()]);
         cli.exclude = Some(vec!["ignored.rs".into()]);
 
-        let result = CommandHandler::expand_files_from_dir(&dir.to_path_buf(), cli.files.as_ref(), cli.exclude.as_ref()).unwrap();
+        let result =
+            CommandHandler::expand_files_from_dir(&dir.to_path_buf(), cli.files.as_ref(), cli.exclude.as_ref())
+                .unwrap();
         let mut expected = expected_files
             .iter()
             .map(|f| f.to_str().expect("convert to str").to_string())

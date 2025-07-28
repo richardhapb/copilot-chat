@@ -30,6 +30,12 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand, PartialEq)]
 pub enum Commands {
+    /// Start a TCP server to communicate with Copilot
+    Tcp {
+        /// Port to bind, default: 4000
+        #[arg(short, long)]
+        port: Option<String>
+    },
     /// Write the commit message for the current directory
     Commit,
     /// List all the available models

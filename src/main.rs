@@ -6,7 +6,10 @@ use tracing::debug;
 use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-use crate::cli::handlers::{CommandHandler, ExecutionType};
+use crate::cli::{
+    commands::Commands,
+    handlers::{CommandHandler, ExecutionType},
+};
 
 mod chat;
 mod cli;
@@ -23,9 +26,10 @@ async fn main() -> anyhow::Result<()> {
     let client = client::CopilotClient::new(auth);
     let streamer = ChatStreamer;
     let mut stdin_str = String::new();
+    let is_tcp = matches!(cli.command, Some(Commands::Tcp { port: _ }));
 
     // Read only from piped stdin
-    if !atty::is(atty::Stream::Stdin) {
+    if !atty::is(atty::Stream::Stdin) && !is_tcp {
         debug!("Reading from stdin");
         // STDIN
         let stdin = io::stdin();
@@ -52,7 +56,10 @@ async fn main() -> anyhow::Result<()> {
 
     match attr.execution_type {
         ExecutionType::Once => {
-            if let Err(e) = attr.process_request(&cli, streamer.clone(), writer, Some(stdin_str)).await {
+            if let Err(e) = attr
+                .process_request(&cli, streamer.clone(), writer, Some(stdin_str))
+                .await
+            {
                 eprintln!("Error: {}", e);
             }
         }
