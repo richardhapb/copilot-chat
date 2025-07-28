@@ -487,9 +487,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_message_with_stream() {
-        let chunk = r#"
-        {"choices":[{"index":0,"delta":{"content":"Rust "}}]}
-        "#;
+        let chunk = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Rust \"}}]}\n\n";
 
         let provider = TestProvider::new(10, chunk);
         let mut chat = Chat::new(provider);
