@@ -40,7 +40,7 @@ impl<'a> CommandHandler<'a> {
         }
     }
 
-    pub async fn prepare(&mut self, client: CopilotClient) -> anyhow::Result<ExecutionAttributes> {
+    pub async fn prepare(&mut self, client: CopilotClient) -> anyhow::Result<ExecutionHandler> {
         let mut is_tcp = false;
         let mut final_port = "4000";
 
@@ -76,7 +76,7 @@ impl<'a> CommandHandler<'a> {
 
         debug!(?message_type, "Received");
 
-        Ok(ExecutionAttributes {
+        Ok(ExecutionHandler {
             chat,
             message_type,
             execution_type,
@@ -165,7 +165,7 @@ impl<'a> CommandHandler<'a> {
 }
 
 #[derive(Debug)]
-pub struct ExecutionAttributes {
+pub struct ExecutionHandler {
     pub chat: Chat<CopilotClient>,
     pub message_type: MessageType,
     pub execution_type: ExecutionType,
@@ -173,7 +173,7 @@ pub struct ExecutionAttributes {
     pub port: String,
 }
 
-impl ExecutionAttributes {
+impl ExecutionHandler {
     pub async fn process_loop(
         &mut self,
         cli: &Cli,
@@ -181,12 +181,11 @@ impl ExecutionAttributes {
         writer: tokio::io::Stdout,
         stdin_str: String,
     ) -> Result<(), ChatError> {
-        debug!("Processing first message");
         let stdin_str = if !stdin_str.is_empty() { Some(stdin_str) } else { None };
 
-        // TODO: Refactor this...
-
+        // Process the first request directly if it is not a TCP request.
         if !self.is_tcp {
+            debug!("Processing first message");
             self.process_request(cli, streamer.clone(), writer, stdin_str).await?;
             self.chat.save_chat(None)?;
             self.message_type.clear_user_prompt();
@@ -198,43 +197,25 @@ impl ExecutionAttributes {
         loop {
             debug!("Capturing new message");
 
-            self.message_type = if !self.is_tcp {
-                let mut read_str = String::new();
-                let stdin = std::io::stdin();
+            let req = if self.is_tcp {
+                // TCP mode - receive request over socket
+                read_from_socket(&self.port)
+                    .await
+                    .map_err(|e| ChatError::Request(e.to_string()))?
+            } else {
                 print!("\n\n> ");
                 stdout.flush().map_err(ChatError::Cache)?;
 
-                // Preserve files from previous message
-                let files = match &mut self.message_type {
-                    MessageType::Code { user_prompt: _, files } => files.take(),
-                    _ => None,
-                };
+                read_from_stdin().await.map_err(|e| ChatError::Request(e.to_string()))?
+            };
 
-                debug!("Reading from interactive mode");
-                stdin.read_line(&mut read_str).map_err(ChatError::Cache)?;
+            if req.prompt.trim() == "exit" {
+                break;
+            }
 
-                if read_str.trim() == "exit" {
-                    break;
-                }
-
-                MessageType::Code {
-                    user_prompt: Some(read_str.trim().to_string()),
-                    files,
-                }
-            } else {
-                // TCP mode - receive request over socket
-                let req = read_from_socket(&self.port)
-                    .await
-                    .map_err(|e| ChatError::Request(e.to_string()))?;
-
-                if req.prompt.trim() == "exit" {
-                    break;
-                }
-
-                MessageType::Code {
-                    user_prompt: Some(req.prompt.trim().to_string()),
-                    files: req.files,
-                }
+            self.message_type = MessageType::Code {
+                user_prompt: Some(req.prompt.trim().to_string()),
+                files: req.files,
             };
 
             let writer = tokio::io::stdout();
@@ -279,6 +260,7 @@ impl ExecutionAttributes {
     }
 }
 
+#[derive(Default)]
 struct RequestProtocol {
     prompt: String,
     files: Option<Vec<String>>,
@@ -300,6 +282,16 @@ impl RequestProtocol {
             files,
         }
     }
+}
+
+async fn read_from_stdin() -> anyhow::Result<RequestProtocol> {
+    let mut read_str = String::new();
+    let stdin = std::io::stdin();
+
+    debug!("Reading from interactive mode");
+    stdin.read_line(&mut read_str).map_err(ChatError::Cache)?;
+
+    Ok(RequestProtocol::from_input(&read_str))
 }
 
 async fn read_from_socket(port: &str) -> anyhow::Result<RequestProtocol> {
