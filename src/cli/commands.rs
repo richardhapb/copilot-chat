@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 #[command(name="copilot-chat", version, about, long_about = None, author="richardhapb")]
 pub struct Cli {
     #[command(subcommand)]
-    pub command: Option<Commands>,
+    pub command: Option<Command>,
 
     /// File path for being read by Copilot
     #[arg(short, long, value_delimiter = ',')]
@@ -29,7 +29,7 @@ pub struct Cli {
 }
 
 #[derive(Debug, Subcommand, PartialEq)]
-pub enum Commands {
+pub enum Command {
     /// Start a TCP server to communicate with Copilot
     Tcp {
         /// Port to bind, default: 4000
@@ -67,7 +67,7 @@ mod tests {
         let req = vec!["copilot-chat", "commit", "write", "a", "cool", "message"];
         let cli = Cli::parse_from(req);
 
-        assert_eq!(cli.command.expect("commit command"), Commands::Commit);
+        assert_eq!(cli.command.expect("commit command"), Command::Commit);
         assert!(cli.prompt.is_some());
 
         assert_eq!(cli.prompt.expect("prompt args"), vec!["write", "a", "cool", "message"]);

@@ -1,12 +1,12 @@
 use crate::{
     chat::{Chat, ChatStreamer, Message, MessageType, Role, errors::ChatError},
-    cli::commands::{Cli, Commands},
+    cli::commands::{Cli, Command},
     client::{CopilotClient, provider::Provider},
 };
 use std::path::PathBuf;
 use std::{fs::read_dir, io::Write};
 use tokio::{io::AsyncReadExt, net::TcpListener};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 #[derive(Debug, PartialEq)]
 #[allow(dead_code)]
@@ -17,12 +17,12 @@ pub enum ExecutionType {
     Exit,
 }
 
-impl From<&Commands> for ExecutionType {
-    fn from(value: &Commands) -> Self {
+impl From<&Command> for ExecutionType {
+    fn from(value: &Command) -> Self {
         match value {
-            Commands::Tcp { port: _ } => ExecutionType::Interactive,
-            Commands::Commit => ExecutionType::Once,
-            Commands::Models | Commands::Clear => ExecutionType::Exit,
+            Command::Tcp { port: _ } => ExecutionType::Interactive,
+            Command::Commit => ExecutionType::Once,
+            Command::Models | Command::Clear => ExecutionType::Exit,
         }
     }
 }
@@ -44,41 +44,29 @@ impl<'a> CommandHandler<'a> {
         let mut is_tcp = false;
         let mut final_port = "4000";
 
-        let chat = match &self.cli_command.command {
-            Some(Commands::Commit) => Some(Chat::new(client)),
-            Some(Commands::Models) => {
+        match &self.cli_command.command {
+            Some(Command::Models) => {
                 client.get_models().await?;
-                None
             }
-            Some(Commands::Clear) => match Chat::<CopilotClient>::try_load_chat(None)? {
+            Some(Command::Clear) => match Chat::<CopilotClient>::try_load_chat(None)? {
                 Some(chat) => {
                     chat.remove_chat(None)?;
                     println!("Chat cleared successfully");
-
-                    None
                 }
                 None => {
                     println!("Chat not found; skipping clearing.");
-                    None
                 }
             },
-            Some(Commands::Tcp { port }) => {
+            Some(Command::Tcp { port }) => {
                 if let Some(port) = port {
                     final_port = port
                 }
                 is_tcp = true;
-                Some(match Chat::try_load_chat(None)? {
-                    Some(chat) => chat.with_provider(client),
-                    None => Chat::new(client),
-                })
             }
-            None => Some(match Chat::try_load_chat(None)? {
-                Some(chat) => chat.with_provider(client),
-                None => Chat::new(client),
-            }),
+            Some(Command::Commit) | None => {}
         };
 
-        let chat = chat.unwrap_or(Chat::new(CopilotClient::default()));
+        let chat = self.resolve_chat(client);
         let message_type = MessageType::from(&*self);
         let execution_type = if let Some(command) = &self.cli_command.command {
             ExecutionType::from(command)
@@ -159,6 +147,20 @@ impl<'a> CommandHandler<'a> {
         }
 
         Ok(files_result)
+    }
+
+    fn resolve_chat(&self, client: CopilotClient) -> Chat<CopilotClient> {
+        match self.cli_command.command {
+            Some(Command::Commit) => Chat::new(client),
+            Some(Command::Tcp { port: _ }) | None => match Chat::try_load_chat(None).unwrap_or_else(|e| {
+                warn!("Chat cannot be loaded: {e}");
+                None
+            }) {
+                Some(chat) => chat.with_provider(client),
+                None => Chat::new(client),
+            },
+            Some(Command::Models | Command::Clear) => Chat::new(CopilotClient::default()),
+        }
     }
 }
 

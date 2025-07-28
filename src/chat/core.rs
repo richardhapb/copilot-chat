@@ -10,7 +10,7 @@ use std::{
 
 use crate::{
     chat::prompts::GENERAL,
-    cli::{commands::Commands, handlers::CommandHandler},
+    cli::{commands::Command, handlers::CommandHandler},
     client::provider::Provider,
     tools::{
         diff::{Diff, DiffsManager, Range},
@@ -411,8 +411,8 @@ pub enum MessageType {
 impl<'a> From<&CommandHandler<'_>> for MessageType {
     fn from(value: &CommandHandler<'_>) -> Self {
         match value.cli_command.command {
-            Some(Commands::Commit) => MessageType::Commit(value.user_prompt.map(|s| s.to_string())),
-            Some(Commands::Models) | Some(Commands::Clear) => MessageType::default(),
+            Some(Command::Commit) => MessageType::Commit(value.user_prompt.map(|s| s.to_string())),
+            Some(Command::Models) | Some(Command::Clear) => MessageType::default(),
             None => MessageType::Code {
                 user_prompt: value.user_prompt.map(|s| s.to_string()),
                 files: CommandHandler::expand_files_from_dir(

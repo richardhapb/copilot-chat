@@ -8,7 +8,7 @@ use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 use crate::cli::{
-    commands::Commands,
+    commands::Command,
     handlers::{CommandHandler, ExecutionType},
 };
 
@@ -27,7 +27,7 @@ async fn main() -> anyhow::Result<()> {
     let client = client::CopilotClient::new(auth);
     let streamer = ChatStreamer;
     let mut stdin_str = String::new();
-    let is_tcp = matches!(cli.command, Some(Commands::Tcp { port: _ }));
+    let is_tcp = matches!(cli.command, Some(Command::Tcp { port: _ }));
 
     // Read only from piped stdin
     if !atty::is(atty::Stream::Stdin) && !is_tcp {
@@ -47,7 +47,7 @@ async fn main() -> anyhow::Result<()> {
     debug!(?user_prompt);
 
     // Resolve the commit stdin if it exists.
-    if matches!(cli.command, Some(Commands::Commit)) {
+    if matches!(cli.command, Some(Command::Commit)) {
         if stdin_str.is_empty() {
             stdin_str = CliExecutor::new().execute("git", &["diff", "--staged"]).await?;
 
