@@ -2,10 +2,9 @@ use crate::{
     chat::{Chat, ChatStreamer, Message, MessageType, Role, errors::ChatError},
     cli::commands::{Cli, Commands},
     client::{CopilotClient, provider::Provider},
-    tools::cli::CliExecutor,
 };
 use std::path::PathBuf;
-use std::{env::current_dir, fs::read_dir, io::Write};
+use std::{fs::read_dir, io::Write};
 use tokio::{io::AsyncReadExt, net::TcpListener};
 use tracing::{debug, info};
 
@@ -18,9 +17,19 @@ pub enum ExecutionType {
     Exit,
 }
 
+impl From<&Commands> for ExecutionType {
+    fn from(value: &Commands) -> Self {
+        match value {
+            Commands::Tcp { port: _ } => ExecutionType::Interactive,
+            Commands::Commit => ExecutionType::Once,
+            Commands::Models | Commands::Clear => ExecutionType::Exit,
+        }
+    }
+}
+
 pub struct CommandHandler<'a> {
-    cli_command: &'a Cli,
-    user_prompt: Option<&'a str>,
+    pub cli_command: &'a Cli,
+    pub user_prompt: Option<&'a str>,
 }
 
 impl<'a> CommandHandler<'a> {
@@ -31,46 +40,26 @@ impl<'a> CommandHandler<'a> {
         }
     }
 
-    pub async fn prepare(
-        &mut self,
-        client: CopilotClient,
-        stdin_str: &mut String,
-    ) -> anyhow::Result<ExecutionAttributes> {
-        let mut execution_type = ExecutionType::Exit;
+    pub async fn prepare(&mut self, client: CopilotClient) -> anyhow::Result<ExecutionAttributes> {
         let mut is_tcp = false;
         let mut final_port = "4000";
 
-        let (message_type, chat) = match &self.cli_command.command {
-            Some(Commands::Commit) => {
-                if stdin_str.is_empty() {
-                    *stdin_str = CliExecutor::new().execute("git", &["diff", "--staged"]).await?;
-
-                    if stdin_str.is_empty() {
-                        eprintln!("Git diff is empty. Ensure you are in a repository and that the changes are staged.");
-                        std::process::exit(1);
-                    }
-                }
-
-                execution_type = ExecutionType::Once;
-                (
-                    Some(MessageType::Commit(self.user_prompt.map(|p| p.to_string()))),
-                    Some(Chat::new(client)),
-                )
-            }
+        let chat = match &self.cli_command.command {
+            Some(Commands::Commit) => Some(Chat::new(client)),
             Some(Commands::Models) => {
                 client.get_models().await?;
-                (None, None)
+                None
             }
             Some(Commands::Clear) => match Chat::<CopilotClient>::try_load_chat(None)? {
                 Some(chat) => {
                     chat.remove_chat(None)?;
                     println!("Chat cleared successfully");
 
-                    (None, None)
+                    None
                 }
                 None => {
                     println!("Chat not found; skipping clearing.");
-                    (None, None)
+                    None
                 }
             },
             Some(Commands::Tcp { port }) => {
@@ -78,40 +67,26 @@ impl<'a> CommandHandler<'a> {
                     final_port = port
                 }
                 is_tcp = true;
-                execution_type = ExecutionType::Interactive;
-                (
-                    Some(MessageType::Code {
-                        user_prompt: None,
-                        files: None,
-                    }),
-                    Some(match Chat::try_load_chat(None)? {
-                        Some(chat) => chat.with_provider(client),
-                        None => Chat::new(client),
-                    }),
-                )
+                Some(match Chat::try_load_chat(None)? {
+                    Some(chat) => chat.with_provider(client),
+                    None => Chat::new(client),
+                })
             }
-            None => {
-                execution_type = ExecutionType::Interactive;
-                (
-                    Some(MessageType::Code {
-                        user_prompt: self.user_prompt.map(|p| p.to_string()),
-                        files: Self::expand_files_from_dir(
-                            &current_dir()?,
-                            self.cli_command.files.as_ref(),
-                            self.cli_command.exclude.as_ref(),
-                        )?,
-                    }),
-                    Some(match Chat::try_load_chat(None)? {
-                        Some(chat) => chat.with_provider(client),
-                        None => Chat::new(client),
-                    }),
-                )
-            }
+            None => Some(match Chat::try_load_chat(None)? {
+                Some(chat) => chat.with_provider(client),
+                None => Chat::new(client),
+            }),
         };
 
         let chat = chat.unwrap_or(Chat::new(CopilotClient::default()));
+        let message_type = MessageType::from(&*self);
+        let execution_type = if let Some(command) = &self.cli_command.command {
+            ExecutionType::from(command)
+        } else {
+            ExecutionType::Exit
+        };
+
         debug!(?message_type, "Received");
-        let message_type = message_type.unwrap_or(MessageType::Commit(None));
 
         Ok(ExecutionAttributes {
             chat,
@@ -126,7 +101,7 @@ impl<'a> CommandHandler<'a> {
     /// with the extension if any, for example: `*.rs` expanded to all Rust source code inside this
     /// directory and child directories. Also exclude all the file or directory names that match
     /// with any of the `exclude` vector
-    fn expand_files_from_dir(
+    pub fn expand_files_from_dir(
         cwd: &PathBuf,
         files: Option<&Vec<String>>,
         exclude: Option<&Vec<String>>,
