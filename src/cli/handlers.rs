@@ -71,7 +71,7 @@ impl<'a> CommandHandler<'a> {
         let execution_type = if let Some(command) = &self.cli_command.command {
             ExecutionType::from(command)
         } else {
-            ExecutionType::Exit
+            ExecutionType::Interactive
         };
 
         debug!(?message_type, "Received");
