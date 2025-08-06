@@ -95,7 +95,7 @@ impl<P: Provider + Default> Chat<P> {
 
         trace!("sending request to copilot");
         let stream = builder
-            .request(model.unwrap_or("gpt-4o"))
+            .request(model.unwrap_or("gpt-4.1"))
             .await
             .map_err(|e| ChatError::Provider(e.to_string()))?;
 
