@@ -41,7 +41,7 @@ async fn main() -> anyhow::Result<()> {
 
     debug! {%stdin_str, "Received"};
 
-    // Parse the user prompt from CLI if exist - clone to avoid partial move
+    // Parse the user prompt from CLI if exist
     let user_prompt = cli.prompt.as_ref().map(|prompt| prompt.join(" "));
 
     debug!(?user_prompt);
@@ -61,10 +61,6 @@ async fn main() -> anyhow::Result<()> {
     let mut handler = CommandHandler::new(&cli, user_prompt.as_deref());
     let mut attr = handler.prepare(client).await?;
 
-    if attr.execution_type == ExecutionType::Exit {
-        std::process::exit(0);
-    }
-
     let writer = tokio::io::stdout();
 
     match attr.execution_type {
@@ -76,7 +72,7 @@ async fn main() -> anyhow::Result<()> {
                 eprintln!("Error: {}", e);
             }
         }
-        ExecutionType::Interactive | ExecutionType::Pipe => {
+        ExecutionType::Interactive => {
             if let Err(e) = attr.process_loop(&cli, &streamer, writer, stdin_str).await {
                 eprintln!("Error: {}", e);
             }

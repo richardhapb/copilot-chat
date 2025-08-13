@@ -13,7 +13,6 @@ use tracing::{debug, info, warn};
 pub enum ExecutionType {
     Once,
     Interactive,
-    Pipe,
     Exit,
 }
 
