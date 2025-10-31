@@ -23,7 +23,7 @@ pub trait Streamer: Clone + Send {
     /// is completely passed to the buffer.
     async fn handle_stream(
         &self,
-        mut stream: (impl Stream<Item = reqwest::Result<bytes::Bytes>> + Unpin),
+        mut stream: impl Stream<Item = reqwest::Result<bytes::Bytes>> + Unpin,
         sender: Sender<String>,
     ) -> anyhow::Result<Message> {
         let mut response = String::new();

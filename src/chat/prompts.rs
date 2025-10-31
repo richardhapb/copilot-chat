@@ -56,6 +56,8 @@ Your response must:
     let cool_var = String::new()
     ````
 - Use the diagnostics for fixing the code provided by the user, only if the user request it, otherwise use it as a reference
+
+IMPORTANT: ONLY RETURN THE CHANGED LINES IF YOU WRITE CODE, THERE IS NO NECESSARY REWRITE THE WHOLE FILE
 "#;
 
 /// Prompt for Git-related operations, suggestions, or fixes.

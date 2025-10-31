@@ -93,9 +93,14 @@ impl<P: Provider + Default> Chat<P> {
             builder.with(user_message);
         }
 
+        let model_to_use = model.unwrap_or("gpt-4.1");
+        info!(model=%model_to_use, "Using");
+
+        // TODO: Validate model
+
         trace!("sending request to copilot");
         let stream = builder
-            .request(model.unwrap_or("gpt-4.1"))
+            .request(model_to_use)
             .await
             .map_err(|e| ChatError::Provider(e.to_string()))?;
 

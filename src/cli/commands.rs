@@ -23,7 +23,7 @@ pub struct Cli {
     #[arg(trailing_var_arg = true, global = true)]
     pub prompt: Option<Vec<String>>,
 
-    /// Prompt to send to Copilot
+    /// Model to be used
     #[arg(short, long, global = true)]
     pub model: Option<String>,
 }
